@@ -7,7 +7,8 @@ reated by https://www.toptal.com/developers/gitignore/api/python,jupyternotebook
 .profile
 .viminfo
 .jupyter/*
-
+.gitconfig
+.bash_history
 ### JupyterNotebooks ###
 # gitignore template for Jupyter Notebooks
 # website: http://jupyter.org/
