@@ -1,6 +1,8 @@
 reated by https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks,localstack
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,jupyternotebooks,localstack
 
+.*
+!.gitignore
 ### other thing ###
 .cache/
 .local/
@@ -9,6 +11,14 @@ reated by https://www.toptal.com/developers/gitignore/api/python,jupyternotebook
 .jupyter/*
 .gitconfig
 .bash_history
+
+.bashrc
+.conda/
+.condarc
+.git-credentials
+.python_history
+.vscode-server/
+.wget-hsts
 ### JupyterNotebooks ###
 # gitignore template for Jupyter Notebooks
 # website: http://jupyter.org/
