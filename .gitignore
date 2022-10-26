@@ -1,8 +1,12 @@
 reated by https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks,localstack
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,jupyternotebooks,localstack
 
+# output model & lightning_log not include
 .*
 !.gitignore
+code/model.pt
+code/lightning_logs/*
+
 ### other thing ###
 .cache/
 .local/
