@@ -15,6 +15,8 @@ from pytorch_lightning.loggers import WandbLogger
 # preprocessing
 from preprocessing import Preprocessing
 import time
+import wandb
+from utils import seed_everything
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -148,35 +150,71 @@ class Model(pl.LightningModule):
         logits = self(x)
         loss = self.loss_func(logits, y.float())
         self.log("train_loss", loss)
-
         return loss
+
+    # training_epoch_end_hood for logging
+    def training_epoch_end(self, training_step_outputs):
+
+        train_loss = 0
+        for out in training_step_outputs:
+            train_loss += out['loss']
+        
+        train_loss = train_loss / len(training_step_outputs)
+        wandb.log({"train_loss": train_loss})
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
         loss = self.loss_func(logits, y.float())
+
         self.log("val_loss", loss)
+        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        self.log("val_pearson", pearson_corr)
 
-        self.log("val_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
+        return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
 
-        return loss
+    # validation_epoch_end_hood for logging
+    def validation_epoch_end(self,validation_step_outputs):
+        val_loss = 0
+        val_pearson_corr = 0
+        for out in validation_step_outputs:
+            val_loss += out['val_loss']
+            val_pearson_corr += out['val_pearson_corr']
+        
+        val_loss = val_loss / len(validation_step_outputs)
+        val_pearson_corr = val_pearson_corr / len(validation_step_outputs)
+
+        wandb.log({
+                     "val_loss": val_loss,
+                    "val_pearson_corr":val_pearson_corr
+                })
 
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
 
-        self.log("test_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
+        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        self.log("test_pearson", test_pearson_corr)
+        return test_pearson_corr
+    
+    # test_epoch_end_hood for logging
+    def test_epoch_end(self,outputs):
+
+        test_pearson_corr = 0
+        for out in outputs:
+            test_pearson_corr += out
+        
+        test_pearson_corr = test_pearson_corr / len(outputs)
+        wandb.log({"test_pearson_corr": test_pearson_corr})
 
     def predict_step(self, batch, batch_idx):
         x = batch
         logits = self(x)
-
         return logits.squeeze()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         return optimizer
-
 
 if __name__ == '__main__':
     # 하이퍼 파라미터 등 각종 설정값을 입력받습니다
@@ -187,16 +225,35 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--max_epoch', default=1, type=int)
     parser.add_argument('--shuffle', default=True)
+
     parser.add_argument('--learning_rate', default=1e-5, type=float)
     parser.add_argument('--train_path', default='../data/train.csv')
     parser.add_argument('--dev_path', default='../data/dev.csv')
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
+    parser.add_argument('--loss_function', default='L1Loss')
+
     args = parser.parse_args()
 
-    print('args: ', args.batch_size, args.learning_rate, args.max_epoch, args.model_name)
+    # check hyperparameter arguments
+    print(args)
 
-    # dataloader와 model을 생성합니다.
+    # seed everything
+    seed_everything(42)
+    
+    # wandb init
+    wandb.init(project="your_project_name", entity="nlp_level1_team1")
+    # wandb.run.name setting
+    run_name = 'roberta_base_epoch_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
+    wandb.run.name = run_name
+
+    wandb.config = {
+    "learning_rate": args.learning_rate,
+    "epochs": args.max_epoch,
+    "batch_size": int(args.batch_size),
+    }
+
+    # dataloader와 model을 생성합니다.cls
     dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
                             args.test_path, args.predict_path)
     model = Model(args.model_name, args.learning_rate)
@@ -208,6 +265,5 @@ if __name__ == '__main__':
     trainer.fit(model=model, datamodule=dataloader)
     trainer.test(model=model, datamodule=dataloader)
 
-    # 학습이 완료된 모델을 저장합니다.
-    model_name = '_'.join([args.model_name.replace('/', '-'), str(args.batch_size), str(args.learning_rate), str(args.max_epoch)]) 
-    torch.save(model, model_name + '.pt')
+    # save model in the models category
+    torch.save(model, 'models/' + run_name + '.pt')
