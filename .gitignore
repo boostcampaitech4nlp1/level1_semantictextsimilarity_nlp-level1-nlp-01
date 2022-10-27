@@ -6,6 +6,11 @@ reated by https://www.toptal.com/developers/gitignore/api/python,jupyternotebook
 !.gitignore
 code/model.pt
 code/lightning_logs/*
+code/models/*
+code/*.sh
+!code/sh_example.sh
+code/wandb/*
+code/lightning_logs/*
 
 ### other thing ###
 .cache/
