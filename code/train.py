@@ -152,7 +152,7 @@ class Model(pl.LightningModule):
         self.log("train_loss", loss)
         return loss
 
-    # training_epoch_end_hood for logging
+    # training_epoch_end_hook for logging
     def training_epoch_end(self, training_step_outputs):
 
         train_loss = 0
@@ -240,9 +240,9 @@ if __name__ == '__main__':
 
     # seed everything
     seed_everything(42)
-    
+
     # wandb init
-    wandb.init(project="your_project_name", entity="nlp_level1_team1")
+    wandb.init(project="sangmun_test", entity="nlp_level1_team1")
     # wandb.run.name setting
     run_name = 'roberta_base_epoch_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
     wandb.run.name = run_name
@@ -256,6 +256,8 @@ if __name__ == '__main__':
     # dataloader와 model을 생성합니다.cls
     dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
                             args.test_path, args.predict_path)
+    # num_workers = 4, 
+
     model = Model(args.model_name, args.learning_rate)
 
     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
