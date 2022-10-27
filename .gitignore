@@ -11,6 +11,7 @@ code/*.sh
 !code/sh_example.sh
 code/wandb/*
 code/lightning_logs/*
+code/out*
 
 ### other thing ###
 .cache/
