@@ -224,7 +224,7 @@ if __name__ == '__main__':
     print(args)
     
     # wandb init
-    wandb.init(project="sangmun_test", entity="nlp_level1_team1")
+    wandb.init(project="your_project_name", entity="nlp_level1_team1")
     # wandb.run.name setting
     run_name = 'roberta_base_epoch_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
     wandb.run.name = run_name
