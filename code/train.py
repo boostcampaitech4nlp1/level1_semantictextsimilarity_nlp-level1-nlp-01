@@ -9,6 +9,7 @@ import torch
 import torchmetrics
 import pytorch_lightning as pl
 import wandb
+from utils import seed_everything
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -222,6 +223,9 @@ if __name__ == '__main__':
 
     # check hyperparameter arguments
     print(args)
+
+    # seed everything
+    seed_everything(42)
     
     # wandb init
     wandb.init(project="your_project_name", entity="nlp_level1_team1")
