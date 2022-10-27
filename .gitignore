@@ -207,3 +207,8 @@ cython_debug/
 #.idea/
 
 # End of https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks,localstack
+
+nohup/*
+nohup
+wandb
+wandb/*

@@ -8,6 +8,13 @@ import transformers
 import torch
 import torchmetrics
 import pytorch_lightning as pl
+
+# wandb logger for lightning
+from pytorch_lightning.loggers import WandbLogger
+
+# preprocessing
+from preprocessing import Preprocessing
+import time
 import wandb
 from utils import seed_everything
 
@@ -46,10 +53,11 @@ class Dataloader(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=160)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=128)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
+        self.prepro_spell_check = Preprocessing()
 
     def tokenizing(self, dataframe):
         data = []
@@ -64,6 +72,12 @@ class Dataloader(pl.LightningDataModule):
         # 안쓰는 컬럼을 삭제합니다.
         data = data.drop(columns=self.delete_columns)
 
+        # 맞춤법 교정 및 이모지 제거
+        start = time.time()
+        data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+        data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+        end = time.time()
+        print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
         # 타겟 데이터가 없으면 빈 배열을 리턴합니다.
         try:
             targets = data[self.target_columns].values.tolist()
@@ -207,9 +221,9 @@ if __name__ == '__main__':
     # 터미널 실행 예시 : python3 run.py --batch_size=64 ...
     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', default='klue/roberta-base', type=str)
+    parser.add_argument('--model_name', default='klue/roberta-small', type=str)
     parser.add_argument('--batch_size', default=8, type=int)
-    parser.add_argument('--max_epoch', default=10, type=int)
+    parser.add_argument('--max_epoch', default=1, type=int)
     parser.add_argument('--shuffle', default=True)
 
     parser.add_argument('--learning_rate', default=1e-5, type=float)
