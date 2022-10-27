@@ -9,6 +9,9 @@ import torch
 import torchmetrics
 import pytorch_lightning as pl
 
+import time
+from preprocessing import Preprocessing
+
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -62,6 +65,14 @@ class Dataloader(pl.LightningDataModule):
     def preprocessing(self, data):
         # 안쓰는 컬럼을 삭제합니다.
         data = data.drop(columns=self.delete_columns)
+
+        # 맞춤법 교정 및 이모지 제거
+        start = time.time()
+        data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+        data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+        print(data[self.text_columns[1]][0])
+        end = time.time()
+        print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
 
         # 타겟 데이터가 없으면 빈 배열을 리턴합니다.
         try:
@@ -179,7 +190,7 @@ if __name__ == '__main__':
     parser.add_argument('--dev_path', default='../data/dev.csv')
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
-    args = parser.parse_args(args=[])
+    args = parser.parse_args()
 
     # dataloader와 model을 생성합니다.
     dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
@@ -190,7 +201,7 @@ if __name__ == '__main__':
 
     # Inference part
     # 저장된 모델로 예측을 진행합니다.
-    model = torch.load('model.pt')
+    model = torch.load('./bongseok_test/367nblv7/checkpoints/epoch=9-step=11660.ckpt')
     predictions = trainer.predict(model=model, datamodule=dataloader)
 
     # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.

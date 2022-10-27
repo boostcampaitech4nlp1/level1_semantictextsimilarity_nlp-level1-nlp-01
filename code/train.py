@@ -9,6 +9,12 @@ import torch
 import torchmetrics
 import pytorch_lightning as pl
 
+# wandb logger for lightning
+from pytorch_lightning.loggers import WandbLogger
+
+# preprocessing
+from preprocessing import Preprocessing
+import time
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -45,10 +51,11 @@ class Dataloader(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=160)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=128)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
+        self.prepro_spell_check = Preprocessing()
 
     def tokenizing(self, dataframe):
         data = []
@@ -63,6 +70,12 @@ class Dataloader(pl.LightningDataModule):
         # 안쓰는 컬럼을 삭제합니다.
         data = data.drop(columns=self.delete_columns)
 
+        # 맞춤법 교정 및 이모지 제거
+        start = time.time()
+        data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+        data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+        end = time.time()
+        print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
         # 타겟 데이터가 없으면 빈 배열을 리턴합니다.
         try:
             targets = data[self.target_columns].values.tolist()
@@ -171,7 +184,7 @@ if __name__ == '__main__':
     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', default='klue/roberta-small', type=str)
-    parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--max_epoch', default=1, type=int)
     parser.add_argument('--shuffle', default=True)
     parser.add_argument('--learning_rate', default=1e-5, type=float)
@@ -179,7 +192,9 @@ if __name__ == '__main__':
     parser.add_argument('--dev_path', default='../data/dev.csv')
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
-    args = parser.parse_args(args=[])
+    args = parser.parse_args()
+
+    print('args: ', args.batch_size, args.learning_rate, args.max_epoch, args.model_name)
 
     # dataloader와 model을 생성합니다.
     dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
@@ -194,4 +209,5 @@ if __name__ == '__main__':
     trainer.test(model=model, datamodule=dataloader)
 
     # 학습이 완료된 모델을 저장합니다.
-    torch.save(model, 'model.pt')
+    model_name = '_'.join([args.model_name.replace('/', '-'), str(args.batch_size), str(args.learning_rate), str(args.max_epoch)]) 
+    torch.save(model, model_name + '.pt')
