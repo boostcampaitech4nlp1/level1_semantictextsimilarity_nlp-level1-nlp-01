@@ -13,24 +13,24 @@ def seed_everything(seed:int = 42):
     torch.backends.cudnn.deterministic = True  # type: ignore
     torch.backends.cudnn.benchmark = True  # type: ignore
 
-def model_selector(name):
+# def model_selector(name):
 
-    model = ''
-    if 'sdlkfjsf':
-        continue
-    else:
-        continue
+#     model = ''
+#     if 'sdlkfjsf':
+#         continue
+#     else:
+#         continue
     
-    return model
+#     return model
 
-def lossfct_selector(name):
+# def lossfct_selector(name):
 
-    loss_fct = ''
+#     loss_fct = ''
 
-    return loss_fct
+#     return loss_fct
 
-def optimizer_selector(name):
+# def optimizer_selector(name):
 
-    Optimizer = ''
+#     Optimizer = ''
 
-    return Optimizer
+#     return Optimizer
