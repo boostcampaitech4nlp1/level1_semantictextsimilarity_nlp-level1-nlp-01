@@ -71,13 +71,15 @@ class Dataloader(pl.LightningDataModule):
     def preprocessing(self, data):
         # 안쓰는 컬럼을 삭제합니다.
         data = data.drop(columns=self.delete_columns)
-
+        
+        if args.preprocessing:
         # 맞춤법 교정 및 이모지 제거
-        start = time.time()
-        data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
-        data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
-        end = time.time()
-        print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
+            start = time.time()
+            data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            end = time.time()
+            print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
+
         # 타겟 데이터가 없으면 빈 배열을 리턴합니다.
         try:
             targets = data[self.target_columns].values.tolist()
@@ -232,7 +234,8 @@ if __name__ == '__main__':
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
     parser.add_argument('--loss_function', default='L1Loss')
-
+    
+    parser.add_argument('--preprocessing', default=False)
     args = parser.parse_args()
 
     # check hyperparameter arguments
@@ -243,8 +246,9 @@ if __name__ == '__main__':
 
     # wandb init
     wandb.init(project="sangmun_test", entity="nlp_level1_team1")
+
     # wandb.run.name setting
-    run_name = 'roberta_base_epoch_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
+    run_name = args.model_name + '_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
     wandb.run.name = run_name
 
     wandb.config = {
@@ -262,7 +266,8 @@ if __name__ == '__main__':
 
     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
     trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1)
-
+    # WandbLogger 사용 시:
+    # trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, logger=wandb_logger, detect_anomaly=True)
     # Train part
     trainer.fit(model=model, datamodule=dataloader)
     trainer.test(model=model, datamodule=dataloader)
