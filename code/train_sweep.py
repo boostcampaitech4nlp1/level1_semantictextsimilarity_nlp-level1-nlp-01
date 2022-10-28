@@ -8,12 +8,18 @@ import transformers
 import torch
 import torchmetrics
 import pytorch_lightning as pl
-import wandb
+
+# wandb logger for lightning
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning import Trainer
-from utils import seed_everything
-import warnings
-warnings.filterwarnings('ignore')
+
+# preprocessing
+from preprocessing import Preprocessing
+import time
+import wandb
+
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning import trainer
+from pytorch_lightning.utilities.seed import seed_everything
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -50,10 +56,11 @@ class Dataloader(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=160)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=128)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
+        self.prepro_spell_check = Preprocessing()
 
     def tokenizing(self, dataframe):
         data = []
@@ -67,6 +74,14 @@ class Dataloader(pl.LightningDataModule):
     def preprocessing(self, data):
         # 안쓰는 컬럼을 삭제합니다.
         data = data.drop(columns=self.delete_columns)
+        
+        if args.preprocessing:
+        # 맞춤법 교정 및 이모지 제거
+            start = time.time()
+            data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            end = time.time()
+            print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
 
         # 타겟 데이터가 없으면 빈 배열을 리턴합니다.
         try:
@@ -141,7 +156,7 @@ class Model(pl.LightningModule):
         self.log("train_loss", loss, on_step=False, on_epoch=True)
         return loss
 
-    # training_epoch_end_hood for logging
+    # training_epoch_end_hook for logging
     def training_epoch_end(self, training_step_outputs):
 
         train_loss = 0
@@ -185,16 +200,6 @@ class Model(pl.LightningModule):
         test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
         self.log("test_pearson", test_pearson_corr)
         return test_pearson_corr
-    
-    # test_epoch_end_hood for logging
-    def test_epoch_end(self,outputs):
-
-        test_pearson_corr = 0
-        for out in outputs:
-            test_pearson_corr += out
-        
-        test_pearson_corr = test_pearson_corr / len(outputs)
-        wandb.log({"test_pearson_corr": test_pearson_corr})
 
     def predict_step(self, batch, batch_idx):
         x = batch
@@ -212,7 +217,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', default='monologg/koelectra-base-v3-discriminator', type=str)
     parser.add_argument('--batch_size', default=32, type=int)
-    parser.add_argument('--max_epoch', default=10, type=int)
+    parser.add_argument('--max_epoch', default=5, type=int)
     parser.add_argument('--shuffle', default=True)
 
     parser.add_argument('--learning_rate', default=1e-5, type=float)
@@ -221,15 +226,17 @@ if __name__ == '__main__':
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
     parser.add_argument('--loss_function', default='L1Loss')
-
+    
+    parser.add_argument('--preprocessing', default=False)
+    parser.add_argument('--precision', default=32, type=int)
     args = parser.parse_args()
 
     # # check hyperparameter arguments
     print(args)
 
     # seed everything
-    seed_everything(42)
-    
+    seed_everything(2022)
+
     
     sweep_config = {
         'method': 'random', # random: 임의의 값의 parameter 세트를 선택
@@ -256,7 +263,7 @@ if __name__ == '__main__':
                 'values': [16, 32]
             },
             'epochs': {
-                'values': [5]
+                'values': [10, 20]
             }
         },
         'early_terminate': {
@@ -277,9 +284,11 @@ if __name__ == '__main__':
         model = Model(sweep_config['name'], sweep_run['lr'])
         wandb_logger = WandbLogger(project="SG_test")
         wandb.watch(model)
+
         trainer = pl.Trainer(gpus=1, max_epochs=sweep_run['epochs'], logger=wandb_logger, log_every_n_steps=1)
         trainer.fit(model=model, datamodule=dataloader)
-        trainer.test(model=model, datamodule=dataloader)
+        test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
+        wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
         
         wandb.finish()
 
