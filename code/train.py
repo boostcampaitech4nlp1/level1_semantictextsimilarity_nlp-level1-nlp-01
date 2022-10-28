@@ -18,6 +18,8 @@ import time
 import wandb
 from utils import seed_everything
 
+#from pytorch_lightning.callbacks import Callback
+
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
         self.inputs = inputs
@@ -198,16 +200,6 @@ class Model(pl.LightningModule):
         test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
         self.log("test_pearson", test_pearson_corr)
         return test_pearson_corr
-    
-    # test_epoch_end_hood for logging
-    def test_epoch_end(self,outputs):
-
-        test_pearson_corr = 0
-        for out in outputs:
-            test_pearson_corr += out
-        
-        test_pearson_corr = test_pearson_corr / len(outputs)
-        wandb.log({"test_pearson_corr": test_pearson_corr})
 
     def predict_step(self, batch, batch_idx):
         x = batch
@@ -270,7 +262,8 @@ if __name__ == '__main__':
     # trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, logger=wandb_logger, detect_anomaly=True)
     # Train part
     trainer.fit(model=model, datamodule=dataloader)
-    trainer.test(model=model, datamodule=dataloader)
+    test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
+    wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
 
     # save model in the models category
-    torch.save(model, 'models/' + run_name + '.pt')
+    #torch.save(model, 'models/' + run_name + '.pt')
