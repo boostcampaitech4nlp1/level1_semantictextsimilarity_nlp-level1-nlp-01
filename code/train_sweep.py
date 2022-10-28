@@ -9,7 +9,11 @@ import torch
 import torchmetrics
 import pytorch_lightning as pl
 import wandb
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning import Trainer
 from utils import seed_everything
+import warnings
+warnings.filterwarnings('ignore')
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -116,7 +120,6 @@ class Model(pl.LightningModule):
     def __init__(self, model_name, lr):
         super().__init__()
         self.save_hyperparameters()
-
         self.model_name = model_name
         self.lr = lr
 
@@ -135,7 +138,7 @@ class Model(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.loss_func(logits, y.float())
-        self.log("train_loss", loss)
+        self.log("train_loss", loss, on_step=False, on_epoch=True)
         return loss
 
     # training_epoch_end_hood for logging
@@ -171,7 +174,7 @@ class Model(pl.LightningModule):
         val_pearson_corr = val_pearson_corr / len(validation_step_outputs)
 
         wandb.log({
-                     "val_loss": val_loss,
+                    "val_loss": val_loss,
                     "val_pearson_corr":val_pearson_corr
                 })
 
@@ -207,7 +210,7 @@ if __name__ == '__main__':
     # 터미널 실행 예시 : python3 run.py --batch_size=64 ...
     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', default='klue/roberta-base', type=str)
+    parser.add_argument('--model_name', default='monologg/koelectra-base-v3-discriminator', type=str)
     parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--max_epoch', default=10, type=int)
     parser.add_argument('--shuffle', default=True)
@@ -221,35 +224,93 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # check hyperparameter arguments
+    # # check hyperparameter arguments
     print(args)
 
     # seed everything
     seed_everything(42)
     
-    # wandb init
-    wandb.init(project="your_project_name", entity="nlp_level1_team1")
-    # wandb.run.name setting
-    run_name = 'roberta_base_epoch_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
-    wandb.run.name = run_name
-
-    wandb.config = {
-    "learning_rate": args.learning_rate,
-    "epochs": args.max_epoch,
-    "batch_size": int(args.batch_size),
+    
+    sweep_config = {
+        'method': 'random', # random: 임의의 값의 parameter 세트를 선택
+                            #'grid' 하이퍼파라미터 모두다
+                            #'bayes' 좀더 확인
+        'project': 'SG_test',
+        'entity': 'nlp_level1_team1',
+        'name' : 'monologg/koelectra-base-v3-discriminator',
+        'metric': {
+                'name':'val_pearson', 
+                'goal':'maximize'
+        }, 
+        'parameters': {
+            'lr':{
+                'distribution': 'uniform',  # parameter를 설정하는 기준을 선택합니다. uniform은 연속적으로 균등한 값들을 선택합니다.
+                #'values': [1e-5, 1e-4, 2e-4, 2e-5]
+                'min':1e-5,                 # 최소값을 설정합니다.
+                'max':1e-4                  # 최대값을 설정합니다.
+            },
+            'optimzer':{
+                'values': ["adam", 'sgd', "adamW"] 
+            },
+            'batch_size': {
+                'values': [16, 32]
+            },
+            'epochs': {
+                'values': [5]
+            }
+        },
+        'early_terminate': {
+            'type': 'hyperband', #earlystop
+            'min_iter': 5
+        }
     }
+    
+
+    # Sweep을 통해 실행될 학습 코드를 작성합니다.
+    def sweep_train(config=None):
+        wandb.init()
+        #wandb.config.update()
+        sweep_run = wandb.config
+        wandb.run.name = sweep_config['name'] +'_Epochs_' + str(sweep_run['epochs']) + '_BS_' + str(sweep_run['batch_size']) + '_LR_' + str(sweep_run['lr'])
+
+        dataloader = Dataloader(sweep_config['name'], sweep_run['batch_size'], args.shuffle, args.train_path, args.dev_path, args.test_path, args.predict_path)
+        model = Model(sweep_config['name'], sweep_run['lr'])
+        wandb_logger = WandbLogger(project="SG_test")
+        wandb.watch(model)
+        trainer = pl.Trainer(gpus=1, max_epochs=sweep_run['epochs'], logger=wandb_logger, log_every_n_steps=1)
+        trainer.fit(model=model, datamodule=dataloader)
+        trainer.test(model=model, datamodule=dataloader)
+        
+        wandb.finish()
+
+
+    sweep_id = wandb.sweep(
+        sweep=sweep_config,     # config 딕셔너리를 추가합니다.
+    )
+    wandb.agent(
+        sweep_id=sweep_id,      # sweep의 정보를 입력하고
+        function=sweep_train,   # train이라는 모델을 학습하는 코드를
+        count=2                 # 총 5회 실행해봅니다.
+    )
+
+   
+
+
+    """
+    로컬로 돌릴 시에는 아래 주석 제거
+    """
 
     # dataloader와 model을 생성합니다.cls
-    dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
-                            args.test_path, args.predict_path)
-    model = Model(args.model_name, args.learning_rate)
+    # dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
+    #                         args.test_path, args.predict_path)
+    # model = Model(args.model_name, args.learning_rate)
 
-    # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
-    trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1)
+    # # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
+    # trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1)
 
-    # Train part
-    trainer.fit(model=model, datamodule=dataloader)
-    trainer.test(model=model, datamodule=dataloader)
+    # # Train part
+    # trainer.fit(model=model, datamodule=dataloader)
+    # trainer.test(model=model, datamodule=dataloader)
 
-    # save model in the models category
-    torch.save(model, 'models/' + run_name + '.pt')
+    # # save model in the models category
+    # torch.save(model, 'models/' + run_name + '.pt')
