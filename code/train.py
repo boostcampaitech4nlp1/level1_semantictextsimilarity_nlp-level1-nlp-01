@@ -16,7 +16,10 @@ from pytorch_lightning.loggers import WandbLogger
 from preprocessing import Preprocessing
 import time
 import wandb
-from utils import seed_everything
+
+#from utils import seed_everything
+from pytorch_lightning.utilities.seed import seed_everything
+#from pytorch_lightning.callbacks import Callback
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -71,13 +74,15 @@ class Dataloader(pl.LightningDataModule):
     def preprocessing(self, data):
         # 안쓰는 컬럼을 삭제합니다.
         data = data.drop(columns=self.delete_columns)
-
+        
+        if args.preprocessing:
         # 맞춤법 교정 및 이모지 제거
-        start = time.time()
-        data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
-        data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
-        end = time.time()
-        print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
+            start = time.time()
+            data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            end = time.time()
+            print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
+
         # 타겟 데이터가 없으면 빈 배열을 리턴합니다.
         try:
             targets = data[self.target_columns].values.tolist()
@@ -196,16 +201,6 @@ class Model(pl.LightningModule):
         test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
         self.log("test_pearson", test_pearson_corr)
         return test_pearson_corr
-    
-    # test_epoch_end_hood for logging
-    def test_epoch_end(self,outputs):
-
-        test_pearson_corr = 0
-        for out in outputs:
-            test_pearson_corr += out
-        
-        test_pearson_corr = test_pearson_corr / len(outputs)
-        wandb.log({"test_pearson_corr": test_pearson_corr})
 
     def predict_step(self, batch, batch_idx):
         x = batch
@@ -222,8 +217,8 @@ if __name__ == '__main__':
     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', default='klue/roberta-small', type=str)
-    parser.add_argument('--batch_size', default=8, type=int)
-    parser.add_argument('--max_epoch', default=1, type=int)
+    parser.add_argument('--batch_size', default=32, type=int)
+    parser.add_argument('--max_epoch', default=5, type=int)
     parser.add_argument('--shuffle', default=True)
 
     parser.add_argument('--learning_rate', default=1e-5, type=float)
@@ -232,7 +227,9 @@ if __name__ == '__main__':
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
     parser.add_argument('--loss_function', default='L1Loss')
-
+    
+    parser.add_argument('--preprocessing', default=False)
+    parser.add_argument('--precision', default=32, type=int)
     args = parser.parse_args()
 
     # check hyperparameter arguments
@@ -243,8 +240,9 @@ if __name__ == '__main__':
 
     # wandb init
     wandb.init(project="sangmun_test", entity="nlp_level1_team1")
+
     # wandb.run.name setting
-    run_name = 'roberta_base_epoch_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
+    run_name = args.model_name + '_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
     wandb.run.name = run_name
 
     wandb.config = {
@@ -260,12 +258,14 @@ if __name__ == '__main__':
 
     model = Model(args.model_name, args.learning_rate)
 
-    # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
-    trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1)
-
+    # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요 # precision : [32bit(default), 16bit]
+    trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, precision=args.precision)
+    # WandbLogger 사용 시:
+    # trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, logger=wandb_logger, detect_anomaly=True)
     # Train part
     trainer.fit(model=model, datamodule=dataloader)
-    trainer.test(model=model, datamodule=dataloader)
+    test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
+    wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
 
     # save model in the models category
     torch.save(model, 'models/' + run_name + '.pt')

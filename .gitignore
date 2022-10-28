@@ -7,11 +7,14 @@ reated by https://www.toptal.com/developers/gitignore/api/python,jupyternotebook
 code/model.pt
 code/lightning_logs/*
 code/models/*
+!code/models
 code/*.sh
 !code/sh_example.sh
 code/wandb/*
 code/lightning_logs/*
 code/out*
+code/test.py
+py-hanspell
 
 ### other thing ###
 .cache/
