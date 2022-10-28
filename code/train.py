@@ -16,8 +16,9 @@ from pytorch_lightning.loggers import WandbLogger
 from preprocessing import Preprocessing
 import time
 import wandb
-from utils import seed_everything
 
+#from utils import seed_everything
+from pytorch_lightning.utilities.seed import seed_everything
 #from pytorch_lightning.callbacks import Callback
 
 class Dataset(torch.utils.data.Dataset):
@@ -216,8 +217,8 @@ if __name__ == '__main__':
     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', default='klue/roberta-small', type=str)
-    parser.add_argument('--batch_size', default=8, type=int)
-    parser.add_argument('--max_epoch', default=1, type=int)
+    parser.add_argument('--batch_size', default=32, type=int)
+    parser.add_argument('--max_epoch', default=5, type=int)
     parser.add_argument('--shuffle', default=True)
 
     parser.add_argument('--learning_rate', default=1e-5, type=float)
@@ -267,4 +268,4 @@ if __name__ == '__main__':
     wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
 
     # save model in the models category
-    #torch.save(model, 'models/' + run_name + '.pt')
+    torch.save(model, 'models/' + run_name + '.pt')
