@@ -132,7 +132,7 @@ class Dataloader(pl.LightningDataModule):
 
 
 class Model(pl.LightningModule):
-    def __init__(self, model_name, lr):
+    def __init__(self, model_name, lr,drop_out):
         super().__init__()
         self.save_hyperparameters()
 
@@ -141,7 +141,8 @@ class Model(pl.LightningModule):
 
         # 사용할 모델을 호출합니다.
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
-            pretrained_model_name_or_path=model_name, num_labels=1)
+            pretrained_model_name_or_path=model_name, num_labels=1,
+            hidden_dropout_prob=drop_out,attention_probs_dropout_prob=drop_out)
         # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
         self.loss_func = torch.nn.L1Loss()
 
@@ -230,13 +231,14 @@ if __name__ == '__main__':
     
     parser.add_argument('--preprocessing', default=False)
     parser.add_argument('--precision', default=32, type=int)
+    parser.add_argument('--dropout', default=0.1, type=float)
     args = parser.parse_args()
 
     # check hyperparameter arguments
     print(args)
 
     # seed everything
-    seed_everything(42)
+    seed_everything(2022)
 
     # wandb init
     wandb.init(project="sangmun_test", entity="nlp_level1_team1")
@@ -256,8 +258,8 @@ if __name__ == '__main__':
                             args.test_path, args.predict_path)
     # num_workers = 4, 
 
-    model = Model(args.model_name, args.learning_rate)
-
+    model = Model(args.model_name, args.learning_rate, args.dropout)
+    
     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요 # precision : [32bit(default), 16bit]
     trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, precision=args.precision)
     # WandbLogger 사용 시:
