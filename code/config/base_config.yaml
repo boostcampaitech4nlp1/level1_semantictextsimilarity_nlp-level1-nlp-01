@@ -26,7 +26,7 @@ train:
     k-fold : 0 # default : 0 => not using
 
 inference:
-    ensemble : True
+    ensemble : False # List or False
 
 repo:
   entity: nlp_level1_team1
