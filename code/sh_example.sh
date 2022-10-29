@@ -2,4 +2,3 @@
 # Try any option you want
 
 # python train.py --batch_size 32 --max_epoch
-# python train.py --loss_function \*torch.nn.HuberLoss()
