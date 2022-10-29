@@ -132,7 +132,7 @@ class Dataloader(pl.LightningDataModule):
 
 
 class Model(pl.LightningModule):
-    def __init__(self, model_name, lr,drop_out):
+    def __init__(self, model_name, lr, drop_out, loss_function):
         super().__init__()
         self.save_hyperparameters()
 
@@ -144,7 +144,7 @@ class Model(pl.LightningModule):
             pretrained_model_name_or_path=model_name, num_labels=1,
             hidden_dropout_prob=drop_out,attention_probs_dropout_prob=drop_out)
         # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
-        self.loss_func = torch.nn.L1Loss()
+        self.loss_func = loss_function
 
     def forward(self, x):
         x = self.plm(x)['logits']
@@ -227,7 +227,7 @@ if __name__ == '__main__':
     parser.add_argument('--dev_path', default='../data/dev.csv')
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
-    parser.add_argument('--loss_function', default='L1Loss')
+    parser.add_argument('--loss_function', default=torch.nn.L1Loss())
     
     parser.add_argument('--preprocessing', default=False)
     parser.add_argument('--precision', default=32, type=int)
@@ -241,24 +241,25 @@ if __name__ == '__main__':
     seed_everything(2022)
 
     # wandb init
-    wandb.init(project="sangmun_test", entity="nlp_level1_team1")
+    wandb.init(project="haewon_test", entity="nlp_level1_team1")
 
     # wandb.run.name setting
-    run_name = args.model_name + '_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate)
+    run_name = 'roberta-base' + '_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate) + '_loss_' + str(args.loss_function).split('.')[-1]
     wandb.run.name = run_name
 
     wandb.config = {
     "learning_rate": args.learning_rate,
     "epochs": args.max_epoch,
     "batch_size": int(args.batch_size),
+    "loss_function":str(args.loss_function)
     }
 
-    # dataloader와 model을 생성합니다.cls
+    # dataloader와 model을 생성합니다.
     dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
                             args.test_path, args.predict_path)
-    # num_workers = 4, 
+    # num_workers = 4
 
-    model = Model(args.model_name, args.learning_rate, args.dropout)
+    model = Model(args.model_name, args.learning_rate, args.dropout, args.loss_function)
     
     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요 # precision : [32bit(default), 16bit]
     trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, precision=args.precision)
