@@ -1,8 +1,8 @@
 path:
-    train_path: ../data/train.csv
-    dev_path: ../data/dev.csv
-    test_path: ../data/dev.csv
-    predict_path: ../data/test.csv
+    train_path: ../data/train_sez_preprocessed.csv
+    dev_path: ../data/dev_preprocessed.csv
+    test_path: ../data/dev_preprocessed.csv
+    predict_path: ../data/test_preprocessed.csv
 
 data:
     shuffle: True
@@ -11,8 +11,8 @@ data:
     max_length : 128
     
 model:
-    model_name: ??? # (Required)
-    saved_name: ??? # (Required)
+    model_name: tunib/electra-ko-en-base # (Required)
+    saved_name: tunib_hj # (Required)
 
 train:
     seed: 2022
@@ -26,4 +26,4 @@ train:
 
 repo:
   entity: nlp_level1_team1
-  project_name: ??? # (Required value) Need to specify your project name
+  project_name: hyejin_test # (Required value) Need to specify your project name
