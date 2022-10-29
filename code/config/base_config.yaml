@@ -1,0 +1,29 @@
+path:
+    train_path: ../data/train.csv
+    dev_path: ../data/dev.csv
+    test_path: ../data/dev.csv
+    predict_path: ../data/test.csv
+
+data:
+    shuffle: True
+    augmentation: # adea, bt 등등
+    use_prepro : False
+    max_length : 128
+    
+model:
+    model_name: ???
+    saved_name: ???
+
+train:
+    seed: 2022
+    gpus: 1
+    batch_size: 8
+    max_epoch: 3
+    learning_rate: 1e-5
+    logging_step: 1
+    drop_out: 0.1
+    precision: 32 # [32(default), 16]
+
+repo:
+  entity: nlp_level1_team1
+  project_name: ??? # (Required value) Need to specify your project name
