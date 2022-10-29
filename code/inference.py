@@ -185,7 +185,6 @@ class Model(pl.LightningModule):
 
 if __name__ == '__main__':
 
-
     # receive arguments 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='')
@@ -193,34 +192,52 @@ if __name__ == '__main__':
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
     parser = argparse.ArgumentParser()
 
-    # seed everything
+    # # seed everything
     seed_everything(cfg.train.seed)
-
-    # parser.add_argument('--model_name', default='klue/roberta-base', type=str)
-    # parser.add_argument('--batch_size', default=8, type=int)
-    # parser.add_argument('--max_epoch', default=30, type=int)
-    # parser.add_argument('--shuffle', default=True)
-    # parser.add_argument('--learning_rate', default=1e-5, type=float)
-    # parser.add_argument('--train_path', default='../data/train.csv')
-    # parser.add_argument('--dev_path', default='../data/dev.csv')
-    # parser.add_argument('--test_path', default='../data/dev.csv')
-    # parser.add_argument('--predict_path', default='../data/test.csv')
-    # args = parser.parse_args()
 
     # Load dataloader & model
     dataloader = Dataloader(cfg)
 
-    # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
-    trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
+    # Pred using a single model
+    if not cfg.inference.ensemble:
 
-    # Inference part
-    model = torch.load(f'./models/{cfg.model.saved_name}.pt')
-    predictions = trainer.predict(model=model, datamodule=dataloader)
+        trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
-    # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
-    predictions = list(round(float(i), 1) for i in torch.cat(predictions))
+        # Inference part
+        model = torch.load(f'./models/{cfg.model.saved_name}.pt')
+        predictions = trainer.predict(model=model, datamodule=dataloader)
 
-    # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
-    output = pd.read_csv('../data/sample_submission.csv')
-    output['target'] = predictions
-    output.to_csv('output.csv', index=False)
+        # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
+        predictions = list(round(float(i), 1) for i in torch.cat(predictions))
+
+        # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
+        output = pd.read_csv('../data/sample_submission.csv')
+        output['target'] = predictions
+        output.to_csv('output.csv', index=False)
+    
+    # Pred using ensemble
+    else:
+
+        output = pd.read_csv('../data/sample_submission.csv')
+        length = len(output)
+
+        # make void tensor to store each model's predictions
+        tmp_sum = torch.zeros((length,),dtype=torch.float32)
+
+        for each in cfg.inference.ensemble:
+
+            trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
+
+            # Inference part
+            model = torch.load(f'./models/{each}')
+            each_pred = trainer.predict(model=model, datamodule=dataloader)
+            each_pred = torch.cat(each_pred)
+            tmp_sum += each_pred
+
+        # divide total_sum by the number of models
+        tmp_sum = tmp_sum / len(cfg.inference.ensemble)
+        predictions = list(round(float(i), 1) for i in tmp_sum)
+
+        output['target'] = predictions
+        output.to_csv('output.csv', index=False)
+
