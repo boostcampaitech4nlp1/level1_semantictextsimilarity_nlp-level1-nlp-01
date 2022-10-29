@@ -14,6 +14,7 @@ code/wandb/*
 code/lightning_logs/*
 code/out*
 code/test.py
+code/hyejin_test
 py-hanspell
 <<<<<<< HEAD
 code/SG_test
