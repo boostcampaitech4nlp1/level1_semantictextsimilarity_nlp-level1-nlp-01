@@ -23,6 +23,7 @@ train:
     logging_step: 1
     drop_out: 0.1
     precision: 32 # [32(default), 16]
+    k-fold : 0 # default : 0 => not using
 
 inference:
     ensemble : True
