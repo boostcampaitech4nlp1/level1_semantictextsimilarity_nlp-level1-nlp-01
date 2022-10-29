@@ -134,7 +134,7 @@ class Model(pl.LightningModule):
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=model_name, num_labels=1)
         # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
-        self.loss_func = torch.nn.L1Loss()
+        self.loss_func = torch.nn.SmoothL1Loss()
 
     def forward(self, x):
         x = self.plm(x)['logits']
@@ -182,11 +182,11 @@ if __name__ == '__main__':
     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', default='klue/roberta-base', type=str)
-    parser.add_argument('--batch_size', default=8, type=int)
-    parser.add_argument('--max_epoch', default=30, type=int)
+    parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--max_epoch', default=20, type=int)
     parser.add_argument('--shuffle', default=True)
     parser.add_argument('--learning_rate', default=1e-5, type=float)
-    parser.add_argument('--train_path', default='../data/train.csv')
+    parser.add_argument('--train_path', default='../data/train_swap_except_zero.csv')
     parser.add_argument('--dev_path', default='../data/dev.csv')
     parser.add_argument('--test_path', default='../data/dev.csv')
     parser.add_argument('--predict_path', default='../data/test.csv')
@@ -202,7 +202,7 @@ if __name__ == '__main__':
     # Inference part
     # 저장된 모델로 예측을 진행합니다.
 
-    model = torch.load('./bongseok_test/367nblv7/checkpoints/epoch=9-step=11660.ckpt')
+    model = torch.load('models/roberta-base_20_BS_16_LR_1e-05_loss_SmoothL1Loss().pt')
 
     predictions = trainer.predict(model=model, datamodule=dataloader)
 
