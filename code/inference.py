@@ -1,7 +1,5 @@
 import argparse
-
 import pandas as pd
-
 from tqdm.auto import tqdm
 
 import transformers
@@ -11,6 +9,9 @@ import pytorch_lightning as pl
 
 import time
 from preprocessing import Preprocessing
+from omegaconf import OmegaConf
+#from utils import seed_everything
+from pytorch_lightning.utilities.seed import seed_everything
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -32,26 +33,29 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class Dataloader(pl.LightningDataModule):
-    def __init__(self, model_name, batch_size, shuffle, train_path, dev_path, test_path, predict_path):
+    def __init__(self, cfgs):
         super().__init__()
-        self.model_name = model_name
-        self.batch_size = batch_size
-        self.shuffle = shuffle
+        self.model_name = cfgs.model.model_name
+        self.batch_size = cfgs.train.batch_size
+        self.shuffle = cfgs.data.shuffle
+        self.max_length = cfgs.data.max_length
 
-        self.train_path = train_path
-        self.dev_path = dev_path
-        self.test_path = test_path
-        self.predict_path = predict_path
+        self.train_path = cfgs.path.train_path
+        self.dev_path = cfgs.path.dev_path
+        self.test_path = cfgs.path.test_path
+        self.predict_path = cfgs.path.predict_path
 
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=160)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=self.max_length)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
+        self.prepro_spell_check = Preprocessing()
+        self.use_prepro = cfgs.data.use_prepro
 
     def tokenizing(self, dataframe):
         data = []
@@ -66,13 +70,13 @@ class Dataloader(pl.LightningDataModule):
         # 안쓰는 컬럼을 삭제합니다.
         data = data.drop(columns=self.delete_columns)
 
+        if self.use_prepro:
         # 맞춤법 교정 및 이모지 제거
-        start = time.time()
-        data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
-        data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
-        print(data[self.text_columns[1]][0])
-        end = time.time()
-        print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
+            start = time.time()
+            data[self.text_columns[0]] = data[self.text_columns[0]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            data[self.text_columns[1]] = data[self.text_columns[1]].apply(lambda x: self.prepro_spell_check.preprocessing(x))
+            end = time.time()
+            print(f"---------- Spell Check Time taken {end - start:.5f} sec ----------")
 
         # 타겟 데이터가 없으면 빈 배열을 리턴합니다.
         try:
@@ -110,7 +114,7 @@ class Dataloader(pl.LightningDataModule):
             self.predict_dataset = Dataset(predict_inputs, [])
 
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=args.shuffle)
+        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=cfgs.data.shuffle)
 
     def val_dataloader(self):
         return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
@@ -123,16 +127,19 @@ class Dataloader(pl.LightningDataModule):
 
 
 class Model(pl.LightningModule):
-    def __init__(self, model_name, lr):
+    def __init__(self,cfgs):
         super().__init__()
         self.save_hyperparameters()
 
-        self.model_name = model_name
-        self.lr = lr
+        self.model_name = cfgs.model.model_name
+        self.lr = cfgs.model.learning_rate
 
         # 사용할 모델을 호출합니다.
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
-            pretrained_model_name_or_path=model_name, num_labels=1)
+            pretrained_model_name_or_path=self.model_name,
+            num_labels=1,
+            hidden_dropout_prob=self.drop_out,
+            attention_probs_dropout_prob=self.drop_out)
         # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
         self.loss_func = torch.nn.SmoothL1Loss()
 
@@ -177,33 +184,37 @@ class Model(pl.LightningModule):
 
 
 if __name__ == '__main__':
-    # 하이퍼 파라미터 등 각종 설정값을 입력받습니다
-    # 터미널 실행 예시 : python3 run.py --batch_size=64 ...
-    # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', default='klue/roberta-base', type=str)
-    parser.add_argument('--batch_size', default=16, type=int)
-    parser.add_argument('--max_epoch', default=20, type=int)
-    parser.add_argument('--shuffle', default=True)
-    parser.add_argument('--learning_rate', default=1e-5, type=float)
-    parser.add_argument('--train_path', default='../data/train_swap_except_zero.csv')
-    parser.add_argument('--dev_path', default='../data/dev.csv')
-    parser.add_argument('--test_path', default='../data/dev.csv')
-    parser.add_argument('--predict_path', default='../data/test.csv')
-    args = parser.parse_args()
 
-    # dataloader와 model을 생성합니다.
-    dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
-                            args.test_path, args.predict_path)
+
+    # receive arguments 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='')
+    args, _ = parser.parse_known_args()
+    cfg = OmegaConf.load(f'./config/{args.config}.yaml')
+    parser = argparse.ArgumentParser()
+
+    # seed everything
+    seed_everything(cfg.train.seed)
+
+    # parser.add_argument('--model_name', default='klue/roberta-base', type=str)
+    # parser.add_argument('--batch_size', default=8, type=int)
+    # parser.add_argument('--max_epoch', default=30, type=int)
+    # parser.add_argument('--shuffle', default=True)
+    # parser.add_argument('--learning_rate', default=1e-5, type=float)
+    # parser.add_argument('--train_path', default='../data/train.csv')
+    # parser.add_argument('--dev_path', default='../data/dev.csv')
+    # parser.add_argument('--test_path', default='../data/dev.csv')
+    # parser.add_argument('--predict_path', default='../data/test.csv')
+    # args = parser.parse_args()
+
+    # Load dataloader & model
+    dataloader = Dataloader(cfg)
 
     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
-    trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1)
+    trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
     # Inference part
-    # 저장된 모델로 예측을 진행합니다.
-
-    model = torch.load('models/roberta-base_20_BS_16_LR_1e-05_loss_SmoothL1Loss().pt')
-
+    model = torch.load(f'./models/{cfg.model.saved_name}.pt')
     predictions = trainer.predict(model=model, datamodule=dataloader)
 
     # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
@@ -212,4 +223,4 @@ if __name__ == '__main__':
     # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
     output = pd.read_csv('../data/sample_submission.csv')
     output['target'] = predictions
-    output.to_csv('output2.csv', index=False)
+    output.to_csv('output.csv', index=False)

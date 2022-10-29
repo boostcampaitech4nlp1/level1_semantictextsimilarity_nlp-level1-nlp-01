@@ -41,18 +41,18 @@ class Preprocessing():
 # 학습 전에 전처리를 미리 하고 싶다면 python preprocessing.py를 실행한다.
 if __name__ == '__main__':
     prepro = Preprocessing()
-    train_df = pd.read_csv('../data/train.csv')
-    dev_df = pd.read_csv('../data/dev.csv')
-    test_df = pd.read_csv('../data/test.csv')
+    train_df = pd.read_csv('../data/train_swap.csv')
+    # dev_df = pd.read_csv('../data/dev.csv')
+    # test_df = pd.read_csv('../data/test.csv')
 
     train_df['sentence_1'] = train_df['sentence_1'].apply(lambda x: prepro.preprocessing(x))
     train_df['sentence_2'] = train_df['sentence_2'].apply(lambda x: prepro.preprocessing(x))
-    train_df.to_csv('../data/train_preprocessed.csv')
+    train_df.to_csv('../data/preprocessed/train_swap_preprocessed.csv')
 
-    dev_df['sentence_1'] = dev_df['sentence_1'].apply(lambda x: prepro.preprocessing(x))
-    dev_df['sentence_2'] = dev_df['sentence_2'].apply(lambda x: prepro.preprocessing(x))
-    dev_df.to_csv('../data/dev_preprocessed.csv')
+    # dev_df['sentence_1'] = dev_df['sentence_1'].apply(lambda x: prepro.preprocessing(x))
+    # dev_df['sentence_2'] = dev_df['sentence_2'].apply(lambda x: prepro.preprocessing(x))
+    # dev_df.to_csv('../data/preprocessed/dev_preprocessed.csv')
 
     # test_df['sentence_1'] = test_df['sentence_1'].apply(lambda x: prepro.preprocessing(x))
     # test_df['sentence_2'] = test_df['sentence_2'].apply(lambda x: prepro.preprocessing(x))
-    # test.to_csv('../data/test_preprocessed.csv')
+    # test.to_csv('../data/preprocessed/test_preprocessed.csv')
