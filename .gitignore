@@ -15,6 +15,10 @@ code/lightning_logs/*
 code/out*
 code/test.py
 py-hanspell
+<<<<<<< HEAD
+code/SG_test
+=======
+>>>>>>> c309b8d85cef6db85faf3d803a8a2056781e3f5c
 
 ### other thing ###
 .cache/
