@@ -2,7 +2,8 @@
 
 pip install -r ./code/requirements.txt
 
-py-hanspell
 git clone https://github.com/ssut/py-hanspell.git
 cd py-hanspell
 python setup.py install
+cd ..
+echo "install complete"
