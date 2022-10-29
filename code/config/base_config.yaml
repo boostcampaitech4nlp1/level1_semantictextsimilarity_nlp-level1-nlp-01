@@ -24,6 +24,9 @@ train:
     drop_out: 0.1
     precision: 32 # [32(default), 16]
 
+inference:
+    ensemble : True
+
 repo:
   entity: nlp_level1_team1
   project_name: ??? # (Required value) Need to specify your project name
