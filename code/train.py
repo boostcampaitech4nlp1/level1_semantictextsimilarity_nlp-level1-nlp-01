@@ -10,6 +10,7 @@ import pytorch_lightning as pl
 
 # wandb logger for lightning
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 # preprocessing
 from preprocessing import Preprocessing
@@ -157,6 +158,7 @@ class Model(pl.LightningModule):
         self.model_name = cfgs.model.model_name
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
+        self.warmup_ratio = cfgs.train.warmup_ratio
 
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
@@ -181,12 +183,6 @@ class Model(pl.LightningModule):
         self.log("train_loss", loss)
         return loss
 
-    # training_epoch_end_hook for logging
-    def training_epoch_end(self, training_step_outputs):
-
-        train_loss = sum([out['loss'] for out in training_step_outputs]) / len(training_step_outputs)
-        wandb.log({"train_loss": train_loss})
-
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
@@ -197,24 +193,6 @@ class Model(pl.LightningModule):
         self.log("val_pearson", pearson_corr)
 
         return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
-
-    # validation_epoch_end_hook for logging
-    def validation_epoch_end(self,validation_step_outputs):
-
-        val_loss = 0
-        val_pearson_corr = 0
-
-        for out in validation_step_outputs:
-            val_loss += out['val_loss']
-            val_pearson_corr += out['val_pearson_corr']
-        
-        val_loss = val_loss / len(validation_step_outputs)
-        val_pearson_corr = val_pearson_corr / len(validation_step_outputs)
-
-        wandb.log({
-                     "val_loss": val_loss,
-                    "val_pearson_corr":val_pearson_corr
-                })
 
     def test_step(self, batch, batch_idx):
         x, y = batch
@@ -231,7 +209,14 @@ class Model(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+
+        scheduler = transformers.get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
+            num_training_steps=self.trainer.estimated_stepping_batches,
+        )
+
+        return [optimizer], [scheduler]
 
 if __name__ == '__main__':
 
@@ -244,31 +229,34 @@ if __name__ == '__main__':
     # seed everything
     seed_everything(cfg.train.seed)
 
-    print(cfg)
-
     if not cfg.train.k_fold:
-
-        # wandb init & setting & config
-        wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
-        wandb.run.name = cfg.model.saved_name
-        wandb.config = {
-            "learning_rate": cfg.train.learning_rate,
-            "epochs": cfg.train.max_epoch,
-            "batch_size": cfg.train.batch_size,
-        }
 
         # Load dataloader & model
         dataloader = Dataloader(cfg)
         model = Model(cfg)
 
-        # Train & Test
-        trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step, precision=cfg.train.precision)
-        trainer.fit(model=model, datamodule=dataloader)
-        test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-        wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
+        # wandb logger
+        wandb_logger = WandbLogger(name=cfg.model.saved_name, project=cfg.repo.project_name)
+        wandb.watch(model)
 
-        # save model in the models category
-        torch.save(model, f'models/{cfg.model.saved_name}.pt')
+        # checkpoint config
+        checkpoint_callback = ModelCheckpoint(dirpath="models/",
+                                            filename=f'{cfg.model.saved_name}',
+                                            save_top_k=1, 
+                                            monitor="val_pearson",
+                                            mode='max')
+
+        # Train & Test
+        trainer = pl.Trainer(gpus=cfg.train.gpus, 
+                            max_epochs=cfg.train.max_epoch,
+                            log_every_n_steps=cfg.train.logging_step,
+                            precision=cfg.train.precision,
+                            logger=wandb_logger,
+                            callbacks=[checkpoint_callback])
+
+        trainer.fit(model=model, datamodule=dataloader)
+        trainer.test(model=model, datamodule=dataloader)
+
     else:
 
         results = []
@@ -276,24 +264,31 @@ if __name__ == '__main__':
 
         for k in range(1,nums_folds+1):
 
-            # wandb init & setting & config
-            wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
-            wandb.run.name = f'{cfg.model.saved_name}_{str(k)}th_fold'
-            wandb.config = {
-                "learning_rate": cfg.train.learning_rate,
-                "epochs": cfg.train.max_epoch,
-                "batch_size": cfg.train.batch_size,
-            }
+            # checkpoint config
+            checkpoint_callback = ModelCheckpoint(dirpath="models/",
+                                                filename=f'{cfg.model.saved_name}_{str(k)}th_fold',
+                                                save_top_k=1, 
+                                                monitor="val_pearson",
+                                                mode='max')
 
             model = Model(cfg)
-            dataloader = Dataloader(cfg,k)
+            dataloader = Dataloader(cfg,k-1)
             dataloader.prepare_data()
             dataloader.setup()
 
-            trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step, precision=cfg.train.precision)
+            # wandb logger
+            wandb_logger = WandbLogger(name=f'{cfg.model.saved_name}_{str(k)}th_fold', project=cfg.repo.project_name)
+            wandb.watch(model)
+
+            trainer = pl.Trainer(gpus=cfg.train.gpus, 
+                                max_epochs=cfg.train.max_epoch,
+                                log_every_n_steps=cfg.train.logging_step,
+                                precision=cfg.train.precision,
+                                logger=wandb_logger,
+                                callbacks=[checkpoint_callback])
+
             trainer.fit(model=model, datamodule=dataloader)
             test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-            wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
 
             results.append(float(test_pearson_corr[0]['test_pearson']))
             wandb.finish()
@@ -312,64 +307,3 @@ if __name__ == '__main__':
         KF_mean_score = sum(results) / nums_folds
         wandb.log({"test_pearson_corr": KF_mean_score})
         wandb.finish()
-
-
-# if __name__ == '__main__':
-#     # 하이퍼 파라미터 등 각종 설정값을 입력받습니다
-#     # 터미널 실행 예시 : python3 run.py --batch_size=64 ...
-#     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('--model_name', default='klue/roberta-base', type=str)
-#     parser.add_argument('--batch_size', default=32, type=int)
-#     parser.add_argument('--max_epoch', default=5, type=int)
-#     parser.add_argument('--shuffle', default=True)
-
-#     parser.add_argument('--learning_rate', default=1e-5, type=float)
-#     parser.add_argument('--train_path', default='../data/train.csv')
-#     parser.add_argument('--dev_path', default='../data/dev.csv')
-#     parser.add_argument('--test_path', default='../data/dev.csv')
-#     parser.add_argument('--predict_path', default='../data/test.csv')
-#     parser.add_argument('--loss_function', default='L1Loss')
-    
-#     parser.add_argument('--preprocessing', default=False)
-#     parser.add_argument('--precision', default=32, type=int)
-#     parser.add_argument('--dropout', default=0.1, type=float)
-#     args = parser.parse_args()
-
-#     # check hyperparameter arguments
-#     print(args)
-
-#     # seed everything
-#     seed_everything(2022)
-
-#     # wandb init
-#     wandb.init(project="sangmun_test", entity="nlp_level1_team1")
-
-#     # wandb.run.name setting
-#     run_name = 'roberta_base_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate) + '_' + str(args.precision) + '_' + str(args.preprocessing)
-#     wandb.run.name = run_name
-
-#     wandb.config = {
-#     "learning_rate": args.learning_rate,
-#     "epochs": args.max_epoch,
-#     "batch_size": int(args.batch_size),
-#     }
-
-#     # dataloader와 model을 생성합니다.cls
-#     dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
-#                             args.test_path, args.predict_path)
-#     # num_workers = 4, 
-
-#     model = Model(args.model_name, args.learning_rate, args.dropout)
-    
-#     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요 # precision : [32bit(default), 16bit]
-#     trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, precision=args.precision)
-#     # WandbLogger 사용 시:
-#     # trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, logger=wandb_logger, detect_anomaly=True)
-#     # Train part
-#     trainer.fit(model=model, datamodule=dataloader)
-#     test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-#     wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
-
-#     # save model in the models category
-#     torch.save(model, 'models/' + run_name + '.pt')
