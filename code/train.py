@@ -22,6 +22,7 @@ from pytorch_lightning.utilities.seed import seed_everything
 from omegaconf import OmegaConf
 #from pytorch_lightning.callbacks import Callback
 
+from utils import optimizer_selector
 from load import load_obj
 
 class Dataset(torch.utils.data.Dataset):
@@ -208,8 +209,9 @@ class Model(pl.LightningModule):
         return logits.squeeze()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-
+        #optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        optimizer = optimizer_selector(cfg.train.optimizer, self.parameters(), lr=self.lr)
+        
         scheduler = transformers.get_linear_schedule_with_warmup(
             optimizer,
             num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
@@ -219,7 +221,7 @@ class Model(pl.LightningModule):
         return [optimizer], [scheduler]
 
 if __name__ == '__main__':
-
+    
     # receive arguments 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='')
