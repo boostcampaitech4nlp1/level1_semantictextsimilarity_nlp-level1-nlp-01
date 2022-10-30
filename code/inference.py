@@ -213,8 +213,8 @@ if __name__ == '__main__':
         trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
         # Inference part
-        model = Model(cfg)
-        model.load_state_dict(torch.load(f'./models/{cfg.model.saved_name}.pt'))
+        model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
+
         predictions = trainer.predict(model=model, datamodule=dataloader)
 
         # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
@@ -239,8 +239,7 @@ if __name__ == '__main__':
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
             # Inference part
-            model = Model(cfg)
-            model.load_state_dict(torch.load(f'./models/{cfg.model.saved_name}.pt'))
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
             each_pred = trainer.predict(model=model, datamodule=dataloader)
             each_pred = torch.cat(each_pred)
             tmp_sum += each_pred
