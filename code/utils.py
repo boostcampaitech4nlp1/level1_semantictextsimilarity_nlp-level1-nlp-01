@@ -3,9 +3,10 @@ import numpy as np
 import random
 import torch
 import os
+import torch.nn.functional as F
 
 def optimizer_selector(name, params, lr):
-    
+
     if name == "Adam":
         optimizer = torch.optim.Adam(params=params, lr=lr)
     elif name == 'AdamW':
@@ -16,3 +17,4 @@ def optimizer_selector(name, params, lr):
         optimizer = torch.optim.RAdam(params=params,lr=lr)
 
     return optimizer
+

@@ -27,6 +27,8 @@ train:
     warmup_ratio : 0 # default : 0
     loss_function : torch.nn.SmoothL1Loss
     optimizer : AdamW # [AdamW, Adam, SGD, RAdam]
+    R_drop : False
+    R_drop_alpha : 1 # default : 1
 
 inference:
     ensemble : False # List or False
