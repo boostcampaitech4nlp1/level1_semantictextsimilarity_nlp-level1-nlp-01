@@ -155,6 +155,7 @@ class Model(pl.LightningModule):
         self.model_name = cfgs.model.model_name
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
+        self.warmup_ratio = cfgs.train.warmup_ratio
 
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
@@ -176,12 +177,6 @@ class Model(pl.LightningModule):
         self.log("train_loss", loss)
         return loss
 
-    # training_epoch_end_hook for logging
-    def training_epoch_end(self, training_step_outputs):
-
-        train_loss = sum([out['loss'] for out in training_step_outputs]) / len(training_step_outputs)
-        wandb.log({"train_loss": train_loss})
-
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
@@ -192,24 +187,6 @@ class Model(pl.LightningModule):
         self.log("val_pearson", pearson_corr)
 
         return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
-
-    # validation_epoch_end_hook for logging
-    def validation_epoch_end(self,validation_step_outputs):
-
-        val_loss = 0
-        val_pearson_corr = 0
-
-        for out in validation_step_outputs:
-            val_loss += out['val_loss']
-            val_pearson_corr += out['val_pearson_corr']
-        
-        val_loss = val_loss / len(validation_step_outputs)
-        val_pearson_corr = val_pearson_corr / len(validation_step_outputs)
-
-        wandb.log({
-                     "val_loss": val_loss,
-                    "val_pearson_corr":val_pearson_corr
-                })
 
     def test_step(self, batch, batch_idx):
         x, y = batch
@@ -226,7 +203,14 @@ class Model(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+
+        scheduler = transformers.get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
+            num_training_steps=self.trainer.estimated_stepping_batches,
+        )
+
+        return [optimizer], [scheduler]
 
 if __name__ == '__main__':
 
@@ -256,14 +240,22 @@ if __name__ == '__main__':
         dataloader = Dataloader(cfg)
         model = Model(cfg)
 
+
+        wandb_logger = WandbLogger(project="sangmun_test2")
+        wandb.watch(model)
+
         # Train & Test
-        trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step, precision=cfg.train.precision)
+        trainer = pl.Trainer(gpus=cfg.train.gpus, 
+                            max_epochs=cfg.train.max_epoch,
+                            log_every_n_steps=cfg.train.logging_step,
+                            precision=cfg.train.precision,
+                            logger=wandb_logger)
+
         trainer.fit(model=model, datamodule=dataloader)
-        test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-        wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
+        trainer.test(model=model, datamodule=dataloader)
 
         # save model in the models category
-        torch.save(model, f'models/{cfg.model.saved_name}.pt')
+        torch.save(model.state_dict(), f'models/{cfg.model.saved_name}.pt')
     else:
 
         results = []

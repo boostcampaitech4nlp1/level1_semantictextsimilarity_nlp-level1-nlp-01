@@ -127,20 +127,21 @@ class Dataloader(pl.LightningDataModule):
 
 
 class Model(pl.LightningModule):
-    def __init__(self,cfgs):
+    def __init__(self, cfgs):
         super().__init__()
         self.save_hyperparameters()
 
         self.model_name = cfgs.model.model_name
-        self.lr = cfgs.model.learning_rate
+        self.lr = cfgs.train.learning_rate
+        self.drop_out = cfgs.train.drop_out
+        self.warmup_ratio = cfgs.train.warmup_ratio
 
-        # 사용할 모델을 호출합니다.
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
             num_labels=1,
             hidden_dropout_prob=self.drop_out,
             attention_probs_dropout_prob=self.drop_out)
-        # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
+
         self.loss_func = torch.nn.L1Loss()
 
     def forward(self, x):
@@ -153,34 +154,42 @@ class Model(pl.LightningModule):
         logits = self(x)
         loss = self.loss_func(logits, y.float())
         self.log("train_loss", loss)
-
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
         loss = self.loss_func(logits, y.float())
+
         self.log("val_loss", loss)
+        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        self.log("val_pearson", pearson_corr)
 
-        self.log("val_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
-
-        return loss
+        return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
 
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
 
-        self.log("test_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
+        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        self.log("test_pearson", test_pearson_corr)
+        return test_pearson_corr
 
     def predict_step(self, batch, batch_idx):
         x = batch
         logits = self(x)
-
         return logits.squeeze()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+
+        scheduler = transformers.get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
+            num_training_steps=self.trainer.estimated_stepping_batches,
+        )
+
+        return [optimizer], [scheduler]
 
 
 if __name__ == '__main__':
@@ -204,7 +213,8 @@ if __name__ == '__main__':
         trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
         # Inference part
-        model = torch.load(f'./models/{cfg.model.saved_name}.pt')
+        model = Model(cfg)
+        model.load_state_dict(torch.load(f'./models/{cfg.model.saved_name}.pt'))
         predictions = trainer.predict(model=model, datamodule=dataloader)
 
         # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
@@ -229,7 +239,8 @@ if __name__ == '__main__':
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
             # Inference part
-            model = torch.load(f'./models/{each}')
+            model = Model(cfg)
+            model.load_state_dict(torch.load(f'./models/{cfg.model.saved_name}.pt'))
             each_pred = trainer.predict(model=model, datamodule=dataloader)
             each_pred = torch.cat(each_pred)
             tmp_sum += each_pred
