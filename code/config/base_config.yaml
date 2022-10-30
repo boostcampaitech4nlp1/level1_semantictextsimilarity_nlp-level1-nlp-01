@@ -25,6 +25,7 @@ train:
     precision: 32 # [32(default), 16]
     k-fold : 0 # default : 0 => not using
     warmup_ratio : 0 # default : 0
+    loss_function : # default : torch.nn.SmoothL1Loss
 
 inference:
     ensemble : False # List or False
