@@ -15,6 +15,8 @@ code/lightning_logs/*
 code/out*
 code/test.py
 py-hanspell
+code/config/*
+!code/config/base_config.yaml
 <<<<<<< HEAD
 code/SG_test
 =======

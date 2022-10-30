@@ -1,5 +1,6 @@
 import argparse
 import pandas as pd
+from sklearn.model_selection import KFold
 from tqdm.auto import tqdm
 
 import transformers
@@ -9,6 +10,7 @@ import pytorch_lightning as pl
 
 # wandb logger for lightning
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 # preprocessing
 from preprocessing import Preprocessing
@@ -19,6 +21,8 @@ import wandb
 from pytorch_lightning.utilities.seed import seed_everything
 from omegaconf import OmegaConf
 #from pytorch_lightning.callbacks import Callback
+
+from load import load_obj
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -39,7 +43,7 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class Dataloader(pl.LightningDataModule):
-    def __init__(self, cfgs):
+    def __init__(self, cfg,idx=None):
         super().__init__()
         self.model_name = cfg.model.model_name
         self.batch_size = cfg.train.batch_size
@@ -60,7 +64,9 @@ class Dataloader(pl.LightningDataModule):
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
         self.prepro_spell_check = Preprocessing()
-        self.use_prepro = cfgs.data.use_prepro
+        self.use_prepro = cfg.data.use_prepro
+        self.k_fold = cfg.train.k_fold
+        self.k = idx
 
     def tokenizing(self, dataframe):
         data = []
@@ -95,19 +101,32 @@ class Dataloader(pl.LightningDataModule):
 
     def setup(self, stage='fit'):
         if stage == 'fit':
-            # 학습 데이터와 검증 데이터셋을 호출합니다
-            train_data = pd.read_csv(self.train_path)
-            val_data = pd.read_csv(self.dev_path)
 
-            # 학습데이터 준비
-            train_inputs, train_targets = self.preprocessing(train_data)
+            if self.k_fold:
+                # Split train data only K-times
+                train_data = pd.read_csv(self.train_path)
+                kf = KFold(n_splits = self.k_fold, shuffle=self.shuffle, random_state=cfg.train.seed)
+                all_splits = [k for k in kf.split(train_data)]
 
-            # 검증데이터 준비
-            val_inputs, val_targets = self.preprocessing(val_data)
+                train_indexes, val_indexes = all_splits[self.k]
+                train_indexes, val_indexes = train_indexes.tolist(), val_indexes.tolist()
 
-            # train 데이터만 shuffle을 적용해줍니다, 필요하다면 val, test 데이터에도 shuffle을 적용할 수 있습니다
-            self.train_dataset = Dataset(train_inputs, train_targets)
-            self.val_dataset = Dataset(val_inputs, val_targets)
+                train_inputs, train_targets = self.preprocessing(train_data.loc[train_indexes])
+                val_inputs, val_targets = self.preprocessing(train_data.loc[val_indexes])
+
+                self.train_dataset = Dataset(train_inputs,train_targets)
+                self.val_dataset = Dataset(val_inputs, val_targets)
+
+            else:
+                train_data = pd.read_csv(self.train_path)
+                val_data = pd.read_csv(self.dev_path)
+
+                train_inputs, train_targets = self.preprocessing(train_data)
+                val_inputs, val_targets = self.preprocessing(val_data)
+
+                self.train_dataset = Dataset(train_inputs, train_targets)
+                self.val_dataset = Dataset(val_inputs, val_targets)
+
         else:
             # 평가데이터 준비
             test_data = pd.read_csv(self.test_path)
@@ -139,6 +158,7 @@ class Model(pl.LightningModule):
         self.model_name = cfgs.model.model_name
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
+        self.warmup_ratio = cfgs.train.warmup_ratio
 
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
@@ -146,7 +166,10 @@ class Model(pl.LightningModule):
             hidden_dropout_prob=self.drop_out,
             attention_probs_dropout_prob=self.drop_out)
 
-        self.loss_func = torch.nn.L1Loss()
+        try:  
+            self.loss_func = load_obj(cfgs.train.loss_function)()
+        except:
+            self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
     def forward(self, x):
         x = self.plm(x)['logits']
@@ -160,12 +183,6 @@ class Model(pl.LightningModule):
         self.log("train_loss", loss)
         return loss
 
-    # training_epoch_end_hook for logging
-    def training_epoch_end(self, training_step_outputs):
-
-        train_loss = sum([out['loss'] for out in training_step_outputs]) / len(training_step_outputs)
-        wandb.log({"train_loss": train_loss})
-
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
@@ -176,24 +193,6 @@ class Model(pl.LightningModule):
         self.log("val_pearson", pearson_corr)
 
         return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
-
-    # validation_epoch_end_hook for logging
-    def validation_epoch_end(self,validation_step_outputs):
-
-        val_loss = 0
-        val_pearson_corr = 0
-
-        for out in validation_step_outputs:
-            val_loss += out['val_loss']
-            val_pearson_corr += out['val_pearson_corr']
-        
-        val_loss = val_loss / len(validation_step_outputs)
-        val_pearson_corr = val_pearson_corr / len(validation_step_outputs)
-
-        wandb.log({
-                     "val_loss": val_loss,
-                    "val_pearson_corr":val_pearson_corr
-                })
 
     def test_step(self, batch, batch_idx):
         x, y = batch
@@ -210,7 +209,14 @@ class Model(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+
+        scheduler = transformers.get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
+            num_training_steps=self.trainer.estimated_stepping_batches,
+        )
+
+        return [optimizer], [scheduler]
 
 if __name__ == '__main__':
 
@@ -223,86 +229,81 @@ if __name__ == '__main__':
     # seed everything
     seed_everything(cfg.train.seed)
 
-    print(cfg)
+    if not cfg.train.k_fold:
 
-    # wandb init & setting & config
-    wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
-    wandb.run.name = cfg.model.saved_name
-    wandb.config = {
-    "learning_rate": cfg.train.learning_rate,
-    "epochs": cfg.train.max_epoch,
-    "batch_size": cfg.train.batch_size,
-    }
+        # Load dataloader & model
+        dataloader = Dataloader(cfg)
+        model = Model(cfg)
 
-    # Load dataloader & model
-    dataloader = Dataloader(cfg)
-    model = Model(cfg)
-    
-    # Train & Test
-    trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step, precision=cfg.train.precision)
-    trainer.fit(model=model, datamodule=dataloader)
-    test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-    wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
+        # wandb logger
+        wandb_logger = WandbLogger(name=cfg.model.saved_name, project=cfg.repo.project_name)
+        wandb.watch(model)
 
-    # save model in the models category
-    torch.save(model, f'models/{cfg.model.saved_name}.pt')
+        # checkpoint config
+        checkpoint_callback = ModelCheckpoint(dirpath="models/",
+                                            filename=f'{cfg.model.saved_name}',
+                                            save_top_k=1, 
+                                            monitor="val_pearson",
+                                            mode='max')
 
-# if __name__ == '__main__':
-#     # 하이퍼 파라미터 등 각종 설정값을 입력받습니다
-#     # 터미널 실행 예시 : python3 run.py --batch_size=64 ...
-#     # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('--model_name', default='klue/roberta-base', type=str)
-#     parser.add_argument('--batch_size', default=32, type=int)
-#     parser.add_argument('--max_epoch', default=5, type=int)
-#     parser.add_argument('--shuffle', default=True)
+        # Train & Test
+        trainer = pl.Trainer(gpus=cfg.train.gpus, 
+                            max_epochs=cfg.train.max_epoch,
+                            log_every_n_steps=cfg.train.logging_step,
+                            precision=cfg.train.precision,
+                            logger=wandb_logger,
+                            callbacks=[checkpoint_callback])
 
-#     parser.add_argument('--learning_rate', default=1e-5, type=float)
-#     parser.add_argument('--train_path', default='../data/train.csv')
-#     parser.add_argument('--dev_path', default='../data/dev.csv')
-#     parser.add_argument('--test_path', default='../data/dev.csv')
-#     parser.add_argument('--predict_path', default='../data/test.csv')
-#     parser.add_argument('--loss_function', default='L1Loss')
-    
-#     parser.add_argument('--preprocessing', default=False)
-#     parser.add_argument('--precision', default=32, type=int)
-#     parser.add_argument('--dropout', default=0.1, type=float)
-#     args = parser.parse_args()
+        trainer.fit(model=model, datamodule=dataloader)
+        trainer.test(model=model, datamodule=dataloader)
 
-#     # check hyperparameter arguments
-#     print(args)
+    else:
 
-#     # seed everything
-#     seed_everything(2022)
+        results = []
+        nums_folds = cfg.train.k_fold
 
-#     # wandb init
-#     wandb.init(project="sangmun_test", entity="nlp_level1_team1")
+        for k in range(1,nums_folds+1):
 
-#     # wandb.run.name setting
-#     run_name = 'roberta_base_' + str(args.max_epoch) + '_BS_' + str(args.batch_size) + '_LR_' + str(args.learning_rate) + '_' + str(args.precision) + '_' + str(args.preprocessing)
-#     wandb.run.name = run_name
+            # checkpoint config
+            checkpoint_callback = ModelCheckpoint(dirpath="models/",
+                                                filename=f'{cfg.model.saved_name}_{str(k)}th_fold',
+                                                save_top_k=1, 
+                                                monitor="val_pearson",
+                                                mode='max')
 
-#     wandb.config = {
-#     "learning_rate": args.learning_rate,
-#     "epochs": args.max_epoch,
-#     "batch_size": int(args.batch_size),
-#     }
+            model = Model(cfg)
+            dataloader = Dataloader(cfg,k-1)
+            dataloader.prepare_data()
+            dataloader.setup()
 
-#     # dataloader와 model을 생성합니다.cls
-#     dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
-#                             args.test_path, args.predict_path)
-#     # num_workers = 4, 
+            # wandb logger
+            wandb_logger = WandbLogger(name=f'{cfg.model.saved_name}_{str(k)}th_fold', project=cfg.repo.project_name)
+            wandb.watch(model)
 
-#     model = Model(args.model_name, args.learning_rate, args.dropout)
-    
-#     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요 # precision : [32bit(default), 16bit]
-#     trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, precision=args.precision)
-#     # WandbLogger 사용 시:
-#     # trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1, logger=wandb_logger, detect_anomaly=True)
-#     # Train part
-#     trainer.fit(model=model, datamodule=dataloader)
-#     test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-#     wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
+            trainer = pl.Trainer(gpus=cfg.train.gpus, 
+                                max_epochs=cfg.train.max_epoch,
+                                log_every_n_steps=cfg.train.logging_step,
+                                precision=cfg.train.precision,
+                                logger=wandb_logger,
+                                callbacks=[checkpoint_callback])
 
-#     # save model in the models category
-#     torch.save(model, 'models/' + run_name + '.pt')
+            trainer.fit(model=model, datamodule=dataloader)
+            test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
+
+            results.append(float(test_pearson_corr[0]['test_pearson']))
+            wandb.finish()
+
+            # Model save code need to added
+
+        # Just for final mean KF_score logging
+        wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
+        wandb.run.name = f'{cfg.model.saved_name}_{str(nums_folds)}_fold_mean'
+        wandb.config = {
+                "learning_rate": cfg.train.learning_rate,
+                "epochs": cfg.train.max_epoch,
+                "batch_size": cfg.train.batch_size,
+        }
+
+        KF_mean_score = sum(results) / nums_folds
+        wandb.log({"test_pearson_corr": KF_mean_score})
+        wandb.finish()

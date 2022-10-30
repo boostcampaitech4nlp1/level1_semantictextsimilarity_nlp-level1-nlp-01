@@ -127,20 +127,21 @@ class Dataloader(pl.LightningDataModule):
 
 
 class Model(pl.LightningModule):
-    def __init__(self,cfgs):
+    def __init__(self, cfgs):
         super().__init__()
         self.save_hyperparameters()
 
         self.model_name = cfgs.model.model_name
-        self.lr = cfgs.model.learning_rate
+        self.lr = cfgs.train.learning_rate
+        self.drop_out = cfgs.train.drop_out
+        self.warmup_ratio = cfgs.train.warmup_ratio
 
-        # 사용할 모델을 호출합니다.
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
             num_labels=1,
             hidden_dropout_prob=self.drop_out,
             attention_probs_dropout_prob=self.drop_out)
-        # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
+
         self.loss_func = torch.nn.L1Loss()
 
     def forward(self, x):
@@ -153,34 +154,42 @@ class Model(pl.LightningModule):
         logits = self(x)
         loss = self.loss_func(logits, y.float())
         self.log("train_loss", loss)
-
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
         loss = self.loss_func(logits, y.float())
+
         self.log("val_loss", loss)
+        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        self.log("val_pearson", pearson_corr)
 
-        self.log("val_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
-
-        return loss
+        return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
 
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
 
-        self.log("test_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
+        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        self.log("test_pearson", test_pearson_corr)
+        return test_pearson_corr
 
     def predict_step(self, batch, batch_idx):
         x = batch
         logits = self(x)
-
         return logits.squeeze()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+
+        scheduler = transformers.get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
+            num_training_steps=self.trainer.estimated_stepping_batches,
+        )
+
+        return [optimizer], [scheduler]
 
 
 def soft_voting(model_names, trainer, dataloader):
@@ -219,7 +228,6 @@ def weighted_voting(model_names, weights, trainer, dataloader):
 
 if __name__ == '__main__':
 
-
     # receive arguments 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='')
@@ -227,40 +235,53 @@ if __name__ == '__main__':
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
     parser = argparse.ArgumentParser()
 
-    # seed everything
+    # # seed everything
     seed_everything(cfg.train.seed)
-
-    # parser.add_argument('--model_name', default='klue/roberta-base', type=str)
-    # parser.add_argument('--batch_size', default=8, type=int)
-    # parser.add_argument('--max_epoch', default=30, type=int)
-    # parser.add_argument('--shuffle', default=True)
-    # parser.add_argument('--learning_rate', default=1e-5, type=float)
-    # parser.add_argument('--train_path', default='../data/train.csv')
-    # parser.add_argument('--dev_path', default='../data/dev.csv')
-    # parser.add_argument('--test_path', default='../data/dev.csv')
-    # parser.add_argument('--predict_path', default='../data/test.csv')
-    # args = parser.parse_args()
 
     # Load dataloader & model
     dataloader = Dataloader(cfg)
 
-    # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
-    trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
+    # Pred using a single model
+    if not cfg.inference.ensemble:
 
-    # Inference part
-    soft_vote = False
-    if(soft_vote):
-        model_names = ['tunib50_BS_32_LR_5e-06', 'tunib50_BS_32_LR_1e-05','tunib30_BS_32_LR_1e-05','tunib30_BS_16_LR_1e-05']
-        predictions = soft_voting(model_names, trainer, dataloader)
+        trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
-    else:
-        model = torch.load(f'./models/{cfg.model.saved_name}.pt')
+        # Inference part
+        model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
+
         predictions = trainer.predict(model=model, datamodule=dataloader)
+
         # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
         predictions = list(round(float(i), 1) for i in torch.cat(predictions))
 
+        # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
+        output = pd.read_csv('../data/sample_submission.csv')
+        output['target'] = predictions
+        output.to_csv('output.csv', index=False)
+    
+    # Pred using ensemble
+    else:
 
-    # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
-    output = pd.read_csv('../data/sample_submission.csv')
-    output['target'] = predictions
-    output.to_csv('output.csv', index=False)
+        output = pd.read_csv('../data/sample_submission.csv')
+        length = len(output)
+
+        # make void tensor to store each model's predictions
+        tmp_sum = torch.zeros((length,),dtype=torch.float32)
+
+        for each in cfg.inference.ensemble:
+
+            trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
+
+            # Inference part
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
+            each_pred = trainer.predict(model=model, datamodule=dataloader)
+            each_pred = torch.cat(each_pred)
+            tmp_sum += each_pred
+
+        # divide total_sum by the number of models
+        tmp_sum = tmp_sum / len(cfg.inference.ensemble)
+        predictions = list(round(float(i), 1) for i in tmp_sum)
+
+        output['target'] = predictions
+        output.to_csv('output.csv', index=False)
+
