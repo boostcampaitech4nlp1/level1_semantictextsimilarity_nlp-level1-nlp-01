@@ -23,6 +23,10 @@ train:
     logging_step: 1
     drop_out: 0.1
     precision: 32 # [32(default), 16]
+    k_fold : 0 # default : 0 => not using
+
+inference:
+    ensemble : False # List or False
 
 repo:
   entity: nlp_level1_team1
