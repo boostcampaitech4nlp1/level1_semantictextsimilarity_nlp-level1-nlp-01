@@ -21,6 +21,8 @@ from pytorch_lightning.utilities.seed import seed_everything
 from omegaconf import OmegaConf
 #from pytorch_lightning.callbacks import Callback
 
+from load import load_obj
+
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
         self.inputs = inputs
@@ -163,7 +165,10 @@ class Model(pl.LightningModule):
             hidden_dropout_prob=self.drop_out,
             attention_probs_dropout_prob=self.drop_out)
 
-        self.loss_func = torch.nn.L1Loss()
+        try:  
+            self.loss_func = load_obj(cfgs.train.loss_function)()
+        except:
+            self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
     def forward(self, x):
         x = self.plm(x)['logits']
