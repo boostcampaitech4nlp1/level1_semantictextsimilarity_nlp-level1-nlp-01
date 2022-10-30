@@ -236,7 +236,7 @@ if __name__ == '__main__':
         model = Model(cfg)
 
         # wandb logger
-        wandb_logger = WandbLogger(name=cfg.model.saved_name, project="sangmun_test2")
+        wandb_logger = WandbLogger(name=cfg.model.saved_name, project=cfg.repo.project_name)
         wandb.watch(model)
 
         # checkpoint config
