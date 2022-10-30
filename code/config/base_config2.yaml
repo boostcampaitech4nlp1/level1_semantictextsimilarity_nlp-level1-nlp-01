@@ -1,0 +1,30 @@
+path:
+    train_path: ../data/train_bt_all_preprocessed.csv
+    dev_path: ../data/dev_preprocessed.csv
+    test_path: ../data/dev_preprocessed.csv
+    predict_path: ../data/test_preprocessed.csv
+
+data:
+    shuffle: True
+    augmentation: # adea, bt 등등
+    use_prepro : False
+    max_length : 128
+    
+model:
+    model_name: tunib/electra-ko-en-base # (Required)
+    saved_name: tunib_32_BS_30_ep_1e-05_bt_all # (Required)
+
+train:
+    seed: 2022
+    gpus: 1
+    batch_size: 32
+    max_epoch: 30
+    learning_rate: 1e-5
+    logging_step: 1
+    drop_out: 0.1
+    precision: 32 # [32(default), 16]
+    k_fold : 0
+
+repo:
+  entity: nlp_level1_team1_2
+  project_name: hyejin_test2 # (Required value) Need to specify your project name
