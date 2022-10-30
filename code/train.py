@@ -1,5 +1,6 @@
 import argparse
 import pandas as pd
+from sklearn.model_selection import KFold
 from tqdm.auto import tqdm
 
 import transformers
@@ -39,7 +40,7 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class Dataloader(pl.LightningDataModule):
-    def __init__(self, cfgs):
+    def __init__(self, cfg,idx=None):
         super().__init__()
         self.model_name = cfg.model.model_name
         self.batch_size = cfg.train.batch_size
@@ -60,7 +61,9 @@ class Dataloader(pl.LightningDataModule):
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
         self.prepro_spell_check = Preprocessing()
-        self.use_prepro = cfgs.data.use_prepro
+        self.use_prepro = cfg.data.use_prepro
+        self.k_fold = cfg.train.k_fold
+        self.k = idx
 
     def tokenizing(self, dataframe):
         data = []
@@ -95,19 +98,32 @@ class Dataloader(pl.LightningDataModule):
 
     def setup(self, stage='fit'):
         if stage == 'fit':
-            # 학습 데이터와 검증 데이터셋을 호출합니다
-            train_data = pd.read_csv(self.train_path)
-            val_data = pd.read_csv(self.dev_path)
 
-            # 학습데이터 준비
-            train_inputs, train_targets = self.preprocessing(train_data)
+            if self.k_fold:
+                # Split train data only K-times
+                train_data = pd.read_csv(self.train_path)
+                kf = KFold(n_splits = self.k_fold, shuffle=self.shuffle, random_state=cfg.train.seed)
+                all_splits = [k for k in kf.split(train_data)]
 
-            # 검증데이터 준비
-            val_inputs, val_targets = self.preprocessing(val_data)
+                train_indexes, val_indexes = all_splits[self.k]
+                train_indexes, val_indexes = train_indexes.tolist(), val_indexes.tolist()
 
-            # train 데이터만 shuffle을 적용해줍니다, 필요하다면 val, test 데이터에도 shuffle을 적용할 수 있습니다
-            self.train_dataset = Dataset(train_inputs, train_targets)
-            self.val_dataset = Dataset(val_inputs, val_targets)
+                train_inputs, train_targets = self.preprocessing(train_data.loc[train_indexes])
+                val_inputs, val_targets = self.preprocessing(train_data.loc[val_indexes])
+
+                self.train_dataset = Dataset(train_inputs,train_targets)
+                self.val_dataset = Dataset(val_inputs, val_targets)
+
+            else:
+                train_data = pd.read_csv(self.train_path)
+                val_data = pd.read_csv(self.dev_path)
+
+                train_inputs, train_targets = self.preprocessing(train_data)
+                val_inputs, val_targets = self.preprocessing(val_data)
+
+                self.train_dataset = Dataset(train_inputs, train_targets)
+                self.val_dataset = Dataset(val_inputs, val_targets)
+
         else:
             # 평가데이터 준비
             test_data = pd.read_csv(self.test_path)
@@ -225,27 +241,73 @@ if __name__ == '__main__':
 
     print(cfg)
 
-    # wandb init & setting & config
-    wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
-    wandb.run.name = cfg.model.saved_name
-    wandb.config = {
-    "learning_rate": cfg.train.learning_rate,
-    "epochs": cfg.train.max_epoch,
-    "batch_size": cfg.train.batch_size,
-    }
+    if not cfg.train.k_fold:
 
-    # Load dataloader & model
-    dataloader = Dataloader(cfg)
-    model = Model(cfg)
-    
-    # Train & Test
-    trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step, precision=cfg.train.precision)
-    trainer.fit(model=model, datamodule=dataloader)
-    test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-    wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
+        # wandb init & setting & config
+        wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
+        wandb.run.name = cfg.model.saved_name
+        wandb.config = {
+            "learning_rate": cfg.train.learning_rate,
+            "epochs": cfg.train.max_epoch,
+            "batch_size": cfg.train.batch_size,
+        }
 
-    # save model in the models category
-    torch.save(model, f'models/{cfg.model.saved_name}.pt')
+        # Load dataloader & model
+        dataloader = Dataloader(cfg)
+        model = Model(cfg)
+
+        # Train & Test
+        trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step, precision=cfg.train.precision)
+        trainer.fit(model=model, datamodule=dataloader)
+        test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
+        wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
+
+        # save model in the models category
+        torch.save(model, f'models/{cfg.model.saved_name}.pt')
+    else:
+
+        results = []
+        nums_folds = cfg.train.k_fold
+
+        for k in range(1,nums_folds+1):
+
+            # wandb init & setting & config
+            wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
+            wandb.run.name = f'{cfg.model.saved_name}_{str(k)}th_fold'
+            wandb.config = {
+                "learning_rate": cfg.train.learning_rate,
+                "epochs": cfg.train.max_epoch,
+                "batch_size": cfg.train.batch_size,
+            }
+
+            model = Model(cfg)
+            dataloader = Dataloader(cfg,k)
+            dataloader.prepare_data()
+            dataloader.setup()
+
+            trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step, precision=cfg.train.precision)
+            trainer.fit(model=model, datamodule=dataloader)
+            test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
+            wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
+
+            results.append(float(test_pearson_corr[0]['test_pearson']))
+            wandb.finish()
+
+            # Model save code need to added
+
+        # Just for final mean KF_score logging
+        wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
+        wandb.run.name = f'{cfg.model.saved_name}_{str(nums_folds)}_fold_mean'
+        wandb.config = {
+                "learning_rate": cfg.train.learning_rate,
+                "epochs": cfg.train.max_epoch,
+                "batch_size": cfg.train.batch_size,
+        }
+
+        KF_mean_score = sum(results) / nums_folds
+        wandb.log({"test_pearson_corr": KF_mean_score})
+        wandb.finish()
+
 
 # if __name__ == '__main__':
 #     # 하이퍼 파라미터 등 각종 설정값을 입력받습니다
