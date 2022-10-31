@@ -22,6 +22,7 @@ from pytorch_lightning.utilities.seed import seed_everything
 from omegaconf import OmegaConf
 #from pytorch_lightning.callbacks import Callback
 
+from utils import optimizer_selector
 from load import load_obj
 
 class Dataset(torch.utils.data.Dataset):
@@ -177,11 +178,26 @@ class Model(pl.LightningModule):
         return x
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        logits = self(x)
-        loss = self.loss_func(logits, y.float())
-        self.log("train_loss", loss)
-        return loss
+
+        if cfg.train.R_drop:
+            x, y = batch
+            logits1 = self(x)
+            logits2 = self(x)
+
+            # R-drop for regression task
+            loss_r = self.loss_func(logits1, logits2)
+            loss = self.loss_func(logits1, y.float()) + self.loss_func(logits2, y.float())
+            loss = loss + cfg.train.R_drop_alpha*loss_r
+
+            self.log("train_loss", loss)
+            return loss
+
+        else:
+            x, y = batch
+            logits = self(x)
+            loss = self.loss_func(logits, y.float())
+            self.log("train_loss", loss)
+            return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
@@ -208,7 +224,8 @@ class Model(pl.LightningModule):
         return logits.squeeze()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        #optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        optimizer = optimizer_selector(cfg.train.optimizer, self.parameters(), lr=self.lr)
 
         scheduler = transformers.get_linear_schedule_with_warmup(
             optimizer,
@@ -219,7 +236,7 @@ class Model(pl.LightningModule):
         return [optimizer], [scheduler]
 
 if __name__ == '__main__':
-
+    
     # receive arguments 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='')
@@ -227,7 +244,7 @@ if __name__ == '__main__':
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
 
     # seed everything
-    seed_everything(cfg.train.seed)
+    # seed_everything(cfg.train.seed)
 
     if not cfg.train.k_fold:
 
@@ -298,12 +315,7 @@ if __name__ == '__main__':
         # Just for final mean KF_score logging
         wandb.init(project=cfg.repo.project_name, entity=cfg.repo.entity)
         wandb.run.name = f'{cfg.model.saved_name}_{str(nums_folds)}_fold_mean'
-        wandb.config = {
-                "learning_rate": cfg.train.learning_rate,
-                "epochs": cfg.train.max_epoch,
-                "batch_size": cfg.train.batch_size,
-        }
-
+        
         KF_mean_score = sum(results) / nums_folds
         wandb.log({"test_pearson_corr": KF_mean_score})
         wandb.finish()

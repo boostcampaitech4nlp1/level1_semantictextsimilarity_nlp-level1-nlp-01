@@ -12,7 +12,7 @@ from preprocessing import Preprocessing
 from omegaconf import OmegaConf
 #from utils import seed_everything
 from pytorch_lightning.utilities.seed import seed_everything
-
+import numpy as np
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -192,6 +192,40 @@ class Model(pl.LightningModule):
         return [optimizer], [scheduler]
 
 
+def soft_voting(model_names, trainer, dataloader):
+    models = torch.nn.ModuleList()
+    for name in model_names:
+        models.append(torch.load(f'./models/{name}.pt'))
+
+    predictions = []
+    for model in models:
+        predict = trainer.predict(model=model, datamodule=dataloader)
+        predict = list(float(i) for i in torch.cat(predict))
+        predictions.append(predict)
+
+    vote_predictions = np.sum(np.array(predictions), axis=0)/len(predictions)
+    vote_predictions = torch.from_numpy(vote_predictions)
+    vote_predictions = list(round(float(i), 1) for i in vote_predictions)
+    
+    return vote_predictions
+
+
+def weighted_voting(model_names, weights, trainer, dataloader):
+    models = torch.nn.ModuleList()
+    for name in model_names:
+        models.append(torch.load(f'./models/{name}.pt'))
+
+    predictions = []
+    for idx,model in enumerate(models):
+        predict = trainer.predict(model=model, datamodule=dataloader)
+        predict = list(float(i)*weights[idx] for i in torch.cat(predict))
+        predictions.append(predict)
+
+    vote_predictions = np.sum(np.array(predictions), axis=0)/sum(weights)
+    vote_predictions = torch.from_numpy(vote_predictions)
+    vote_predictions = list(round(float(i), 1) for i in vote_predictions)
+
+
 if __name__ == '__main__':
 
     # receive arguments 
@@ -239,7 +273,7 @@ if __name__ == '__main__':
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
             # Inference part
-            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
+            model = Model.load_from_checkpoint(checkpoint_path=f'models/{each}.ckpt')
             each_pred = trainer.predict(model=model, datamodule=dataloader)
             each_pred = torch.cat(each_pred)
             tmp_sum += each_pred

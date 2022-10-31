@@ -3,35 +3,18 @@ import numpy as np
 import random
 import torch
 import os
+import torch.nn.functional as F
 
-# Replaced this function with pytorch lightning seed library
-# def seed_everything(seed:int = 42):
-#     random.seed(seed)
-#     np.random.seed(seed)
-#     os.environ["PYTHONHASHSEED"] = str(seed)
-#     torch.manual_seed(seed)
-#     torch.cuda.manual_seed(seed)  # type: ignore
-#     torch.backends.cudnn.deterministic = True  # type: ignore
-#     torch.backends.cudnn.benchmark = True  # type: ignore
+def optimizer_selector(name, params, lr):
 
-# def model_selector(name):
+    if name == "Adam":
+        optimizer = torch.optim.Adam(params=params, lr=lr)
+    elif name == 'AdamW':
+        optimizer = torch.optim.AdamW(params=params,lr=lr)
+    elif name == 'SGD':
+        optimizer = torch.optim.SGD(params=params,lr=lr)
+    elif name == 'RAdam':
+        optimizer = torch.optim.RAdam(params=params,lr=lr)
 
-#     model = ''
-#     if 'sdlkfjsf':
-#         continue
-#     else:
-#         continue
-    
-#     return model
+    return optimizer
 
-# def lossfct_selector(name):
-
-#     loss_fct = ''
-
-#     return loss_fct
-
-# def optimizer_selector(name):
-
-#     Optimizer = ''
-
-#     return Optimizer
