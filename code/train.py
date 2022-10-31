@@ -10,6 +10,7 @@ import pytorch_lightning as pl
 
 # wandb logger for lightning
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 # preprocessing
@@ -224,14 +225,15 @@ class Model(pl.LightningModule):
         return logits.squeeze()
 
     def configure_optimizers(self):
-        #optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        optimizer = optimizer_selector(cfg.train.optimizer, self.parameters(), lr=self.lr)
 
-        scheduler = transformers.get_linear_schedule_with_warmup(
+        optimizer = optimizer_selector(cfg.train.optimizer, self.parameters(), lr=self.lr)
+        scheduler = transformers.get_cosine_with_hard_restarts_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
+            num_warmup_steps=self.warmup_ratio*self.trainer.estimated_stepping_batches,
             num_training_steps=self.trainer.estimated_stepping_batches,
         )
+
+        scheduler = {'scheduler':scheduler, 'interval':'step', 'frequency':1}
 
         return [optimizer], [scheduler]
 
@@ -263,13 +265,16 @@ if __name__ == '__main__':
                                             monitor="val_pearson",
                                             mode='max')
 
+        # Learning rate monitor
+        lr_monitor = LearningRateMonitor(logging_interval='step')
+
         # Train & Test
         trainer = pl.Trainer(gpus=cfg.train.gpus, 
                             max_epochs=cfg.train.max_epoch,
                             log_every_n_steps=cfg.train.logging_step,
                             precision=cfg.train.precision,
                             logger=wandb_logger,
-                            callbacks=[checkpoint_callback])
+                            callbacks=[checkpoint_callback, lr_monitor])
 
         trainer.fit(model=model, datamodule=dataloader)
         trainer.test(model=model, datamodule=dataloader)
