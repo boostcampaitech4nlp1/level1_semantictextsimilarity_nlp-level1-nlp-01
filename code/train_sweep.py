@@ -1,7 +1,7 @@
 import argparse
-
+import yaml
 import pandas as pd
-
+from sklearn.model_selection import KFold
 from tqdm.auto import tqdm
 
 import transformers
@@ -11,15 +11,21 @@ import pytorch_lightning as pl
 
 # wandb logger for lightning
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor
 
 # preprocessing
 from preprocessing import Preprocessing
 import time
 import wandb
 
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning import trainer
+#from utils import seed_everything
 from pytorch_lightning.utilities.seed import seed_everything
+from omegaconf import OmegaConf
+#from pytorch_lightning.callbacks import Callback
+
+from utils import optimizer_selector, loss_fct_selector
+from load import load_obj
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -40,27 +46,30 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class Dataloader(pl.LightningDataModule):
-    def __init__(self, model_name, batch_size, shuffle, train_path, dev_path, test_path, predict_path):
+    def __init__(self, hparams):
         super().__init__()
-        self.model_name = model_name
-        self.batch_size = batch_size
-        self.shuffle = shuffle
+        self.model_name = hparams['model_name']
+        self.batch_size = hparams['bs']
+        self.shuffle = True
 
-        self.train_path = train_path
-        self.dev_path = dev_path
-        self.test_path = test_path
-        self.predict_path = predict_path
+        self.train_path = hparams['train_path']
+        self.dev_path = hparams['dev_path']
+        self.test_path = hparams['test_path']
+        self.predict_path = hparams['predict_path']
 
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, max_length=128)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=128)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
         self.prepro_spell_check = Preprocessing()
+        self.use_prepro = False
+        self.k_fold = 0
+        self.k = 0
 
     def tokenizing(self, dataframe):
         data = []
@@ -132,17 +141,24 @@ class Dataloader(pl.LightningDataModule):
 
 
 class Model(pl.LightningModule):
-    def __init__(self, model_name, lr):
+    def __init__(self, hparams):
         super().__init__()
         self.save_hyperparameters()
-        self.model_name = model_name
-        self.lr = lr
+        self.model_name = hparams['model_name']
+        self.lr = hparams['lr']
+        self.drop_out = 0.1 # hparams['drop_out']
+        self.warmup_ratio = hparams['warmup_step']
+        self.use_r_drop = False # hparams['R_drop']
+        self.optimizer = hparams['optimizer']
 
         # 사용할 모델을 호출합니다.
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
-            pretrained_model_name_or_path=model_name, num_labels=1)
+            pretrained_model_name_or_path=self.model_name,
+            num_labels=1,
+            hidden_dropout_prob=self.drop_out,
+            attention_probs_dropout_prob=self.drop_out)
         # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
-        self.loss_func = torch.nn.L1Loss()
+        self.loss_func = loss_fct_selector(hparams['loss_fct'])
 
     def forward(self, x):
         x = self.plm(x)['logits']
@@ -150,21 +166,26 @@ class Model(pl.LightningModule):
         return x
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        logits = self(x)
-        loss = self.loss_func(logits, y.float())
-        self.log("train_loss", loss, on_step=False, on_epoch=True)
-        return loss
 
-    # training_epoch_end_hook for logging
-    def training_epoch_end(self, training_step_outputs):
+        if self.use_r_drop:
+            x, y = batch
+            logits1 = self(x)
+            logits2 = self(x)
 
-        train_loss = 0
-        for out in training_step_outputs:
-            train_loss += out['loss']
-        
-        train_loss = train_loss / len(training_step_outputs)
-        wandb.log({"train_loss": train_loss})
+            # R-drop for regression task
+            loss_r = self.loss_func(logits1, logits2)
+            loss = self.loss_func(logits1, y.float()) + self.loss_func(logits2, y.float())
+            loss = loss + loss_r
+
+            self.log("train_loss", loss)
+            return loss
+
+        else:
+            x, y = batch
+            logits = self(x)
+            loss = self.loss_func(logits, y.float())
+            self.log("train_loss", loss)
+            return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
@@ -176,22 +197,6 @@ class Model(pl.LightningModule):
         self.log("val_pearson", pearson_corr)
 
         return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
-
-    # validation_epoch_end_hood for logging
-    def validation_epoch_end(self,validation_step_outputs):
-        val_loss = 0
-        val_pearson_corr = 0
-        for out in validation_step_outputs:
-            val_loss += out['val_loss']
-            val_pearson_corr += out['val_pearson_corr']
-        
-        val_loss = val_loss / len(validation_step_outputs)
-        val_pearson_corr = val_pearson_corr / len(validation_step_outputs)
-
-        wandb.log({
-                    "val_loss": val_loss,
-                    "val_pearson_corr":val_pearson_corr
-                })
 
     def test_step(self, batch, batch_idx):
         x, y = batch
@@ -207,119 +212,94 @@ class Model(pl.LightningModule):
         return logits.squeeze()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+
+        optimizer = optimizer_selector(self.optimizer, self.parameters(), lr=self.lr)
+        scheduler = transformers.get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=self.warmup_ratio*self.trainer.estimated_stepping_batches,
+            num_training_steps=self.trainer.estimated_stepping_batches,
+        )
+
+        scheduler = {'scheduler':scheduler, 'interval':'step', 'frequency':1}
+
+        return [optimizer], [scheduler]
+
 
 if __name__ == '__main__':
-    # 하이퍼 파라미터 등 각종 설정값을 입력받습니다
-    # 터미널 실행 예시 : python3 run.py --batch_size=64 ...
-    # 실행 시 '--batch_size=64' 같은 인자를 입력하지 않으면 default 값이 기본으로 실행됩니다
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', default='monologg/koelectra-base-v3-discriminator', type=str)
+    parser.add_argument('--model_name', default='klue/roberta-small', type=str)
     parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--max_epoch', default=5, type=int)
     parser.add_argument('--shuffle', default=True)
 
     parser.add_argument('--learning_rate', default=1e-5, type=float)
-    parser.add_argument('--train_path', default='../data/train.csv')
-    parser.add_argument('--dev_path', default='../data/dev.csv')
-    parser.add_argument('--test_path', default='../data/dev.csv')
-    parser.add_argument('--predict_path', default='../data/test.csv')
-    parser.add_argument('--loss_function', default='L1Loss')
+    parser.add_argument('--train_path', default='/opt/ml/data/train_sez_preprocessed.csv')
+    parser.add_argument('--dev_path', default='/opt/ml/data/dev_preprocessed.csv')
+    parser.add_argument('--test_path', default='/opt/ml/data/dev_preprocessed.csv')
+    parser.add_argument('--predict_path', default='/opt/ml/data/dev_preprocessed.csv')
+
+    parser.add_argument('--R_drop', default=False)
+    parser.add_argument('--optimizer',default='AdamW')
+    parser.add_argument('--loss_fct', default='L1Loss')
+    parser.add_argument('--drop_out', default=0.1)
+    parser.add_argument('--warmup_step', default=0)
     
     parser.add_argument('--preprocessing', default=False)
-    parser.add_argument('--precision', default=32, type=int)
+    parser.add_argument('--precision', default=16, type=int)
+
     args = parser.parse_args()
 
     # # check hyperparameter arguments
     print(args)
 
-    # seed everything
-    seed_everything(2022)
+    with open('/opt/ml/code/config/sweep_config.yaml') as file:
 
-    
-    sweep_config = {
-        'method': 'random', # random: 임의의 값의 parameter 세트를 선택
-                            #'grid' 하이퍼파라미터 모두다
-                            #'bayes' 좀더 확인
-        'project': 'SG_test',
-        'entity': 'nlp_level1_team1',
-        'name' : 'monologg/koelectra-base-v3-discriminator',
-        'metric': {
-                'name':'val_pearson', 
-                'goal':'maximize'
-        }, 
-        'parameters': {
-            'lr':{
-                'distribution': 'uniform',  # parameter를 설정하는 기준을 선택합니다. uniform은 연속적으로 균등한 값들을 선택합니다.
-                #'values': [1e-5, 1e-4, 2e-4, 2e-5]
-                'min':1e-5,                 # 최소값을 설정합니다.
-                'max':1e-4                  # 최대값을 설정합니다.
-            },
-            'optimzer':{
-                'values': ["adam", 'sgd', "adamW"] 
-            },
-            'batch_size': {
-                'values': [16, 32]
-            },
-            'epochs': {
-                'values': [10, 20]
-            }
-        },
-        'early_terminate': {
-            'type': 'hyperband', #earlystop
-            'min_iter': 5
+        config = yaml.load(file, Loader=yaml.FullLoader)
+
+        run = wandb.init(config=config)
+
+        hparams = {
+            'model_name':args.model_name,
+            'lr':wandb.config.learning_rate,
+            'bs':wandb.config.batch_size,
+            'epochs':wandb.config.max_epoch,
+            'precision':wandb.config.precision,
+            #'R_drop':wandb.config.R_drop,
+            'loss_fct':wandb.config.loss_fct,
+            'optimizer':wandb.config.optimizer,
+            'warmup_step':wandb.config.warmup_step,
+            #'drop_out':wandb.config.drop_out,
+
+            'train_path':args.train_path,
+            'dev_path':args.dev_path,
+            'test_path':args.test_path,
+            'predict_path':args.predict_path
         }
-    }
-    
 
-    # Sweep을 통해 실행될 학습 코드를 작성합니다.
-    def sweep_train(config=None):
-        wandb.init()
-        #wandb.config.update()
-        sweep_run = wandb.config
-        wandb.run.name = sweep_config['name'] +'_Epochs_' + str(sweep_run['epochs']) + '_BS_' + str(sweep_run['batch_size']) + '_LR_' + str(sweep_run['lr'])
+        dataloader = Dataloader(hparams)
+        model = Model(hparams)
 
-        dataloader = Dataloader(sweep_config['name'], sweep_run['batch_size'], args.shuffle, args.train_path, args.dev_path, args.test_path, args.predict_path)
-        model = Model(sweep_config['name'], sweep_run['lr'])
-        wandb_logger = WandbLogger(project="SG_test")
+        wandb_logger = WandbLogger(project="sangmun_test_warmup")
         wandb.watch(model)
 
-        trainer = pl.Trainer(gpus=1, max_epochs=sweep_run['epochs'], logger=wandb_logger, log_every_n_steps=1)
+        # checkpoint config
+        checkpoint_callback = ModelCheckpoint(dirpath="models/",
+                                            filename = str(hparams['warmup_step']) + '_' + str(hparams['optimizer']) + '_' + str(hparams['lr']),
+                                            #filename=f'{hparams['optmizer']}_{hparams['lr']}',
+                                            save_top_k=1, 
+                                            monitor="val_pearson",
+                                            mode='max')
+
+        # Learning rate monitor
+        lr_monitor = LearningRateMonitor(logging_interval='step')
+
+        trainer = pl.Trainer(gpus=1,
+                            max_epochs=hparams['epochs'],
+                            logger=wandb_logger,
+                            log_every_n_steps=1,
+                            precision=hparams['precision'],
+                            callbacks=[checkpoint_callback, lr_monitor])
+
         trainer.fit(model=model, datamodule=dataloader)
-        test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
-        wandb.log({"test_pearson_corr": test_pearson_corr[0]['test_pearson']})
-        
-        wandb.finish()
-
-
-    sweep_id = wandb.sweep(
-        sweep=sweep_config,     # config 딕셔너리를 추가합니다.
-    )
-    wandb.agent(
-        sweep_id=sweep_id,      # sweep의 정보를 입력하고
-        function=sweep_train,   # train이라는 모델을 학습하는 코드를
-        count=2                 # 총 5회 실행해봅니다.
-    )
-
-   
-
-
-    """
-    로컬로 돌릴 시에는 아래 주석 제거
-    """
-
-    # dataloader와 model을 생성합니다.cls
-    # dataloader = Dataloader(args.model_name, args.batch_size, args.shuffle, args.train_path, args.dev_path,
-    #                         args.test_path, args.predict_path)
-    # model = Model(args.model_name, args.learning_rate)
-
-    # # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
-    # trainer = pl.Trainer(gpus=1, max_epochs=args.max_epoch, log_every_n_steps=1)
-
-    # # Train part
-    # trainer.fit(model=model, datamodule=dataloader)
-    # trainer.test(model=model, datamodule=dataloader)
-
-    # # save model in the models category
-    # torch.save(model, 'models/' + run_name + '.pt')
+        trainer.test(model=model, datamodule=dataloader)

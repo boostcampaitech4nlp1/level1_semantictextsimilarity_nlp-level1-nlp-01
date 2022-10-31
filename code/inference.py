@@ -188,9 +188,7 @@ class Model(pl.LightningModule):
             num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
             num_training_steps=self.trainer.estimated_stepping_batches,
         )
-
         return [optimizer], [scheduler]
-
 
 if __name__ == '__main__':
 
@@ -227,7 +225,6 @@ if __name__ == '__main__':
     
     # Pred using ensemble
     else:
-
         output = pd.read_csv('../data/sample_submission.csv')
         length = len(output)
 

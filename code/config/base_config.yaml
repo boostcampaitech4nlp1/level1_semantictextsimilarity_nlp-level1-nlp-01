@@ -23,10 +23,10 @@ train:
     logging_step: 1
     drop_out: 0.1
     precision: 32 # [32(default), 16]
-    k_fold : 0 # default : 0 => not using
+    k_fold : 0 # default : 0
     warmup_ratio : 0 # default : 0
     loss_function : torch.nn.SmoothL1Loss
-    optimizer : AdamW # [AdamW, Adam, SGD, RAdam]
+    optimizer : RAdam # [AdamW, Adam, SGD, RAdam]
     R_drop : False
     R_drop_alpha : 1 # default : 1
 

@@ -18,3 +18,20 @@ def optimizer_selector(name, params, lr):
 
     return optimizer
 
+def loss_fct_selector(name):
+
+    loss_func = torch.nn.L1Loss()
+
+    if name == 'L1Loss':
+        loss_func = torch.nn.L1Loss()
+
+    elif name == 'HuberLoss':
+        loss_func = torch.nn.HuberLoss()
+
+    elif name == 'SmoothL1Loss':
+        loss_fun = torch.nn.SmoothL1Loss()
+    return loss_func
+
+if __name__ == '__main__':
+
+    print("This is utils.py")
