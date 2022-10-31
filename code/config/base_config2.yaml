@@ -18,8 +18,8 @@ train:
     seed: 2022
     gpus: 1
     batch_size: 32
-    max_epoch: 30
-    learning_rate: 1e-5
+    max_epoch: 20
+    learning_rate: 1e-05
     logging_step: 1
     drop_out: 0.1
     precision: 32 # [32(default), 16]

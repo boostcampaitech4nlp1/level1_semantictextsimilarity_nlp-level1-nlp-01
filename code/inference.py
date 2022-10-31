@@ -12,7 +12,7 @@ from preprocessing import Preprocessing
 from omegaconf import OmegaConf
 #from utils import seed_everything
 from pytorch_lightning.utilities.seed import seed_everything
-
+import numpy as np
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -182,7 +182,41 @@ class Model(pl.LightningModule):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         return optimizer
 
+def soft_voting(model_names, trainer, dataloader):
+    models = torch.nn.ModuleList()
+    for name in model_names:
+        models.append(torch.load(f'./models/{name}.pt'))
 
+    predictions = []
+    for model in models:
+        predict = trainer.predict(model=model, datamodule=dataloader)
+        predict = list(float(i) for i in torch.cat(predict))
+        predictions.append(predict)
+
+    vote_predictions = np.sum(np.array(predictions), axis=0)/len(predictions)
+    vote_predictions = torch.from_numpy(vote_predictions)
+    vote_predictions = list(round(float(i), 1) for i in vote_predictions)
+    
+    return vote_predictions
+
+def weighted_voting(model_names, weights, trainer, dataloader):
+    models = torch.nn.ModuleList()
+    for name in model_names:
+        models.append(torch.load(f'./models/{name}.pt'))
+
+    predictions = []
+    for idx,model in enumerate(models):
+        predict = trainer.predict(model=model, datamodule=dataloader)
+        predict = list(float(i)*weights[idx] for i in torch.cat(predict))
+        predictions.append(predict)
+
+    vote_predictions = np.sum(np.array(predictions), axis=0)/sum(weights)
+    vote_predictions = torch.from_numpy(vote_predictions)
+    vote_predictions = list(round(float(i), 1) for i in vote_predictions)
+    
+    return vote_predictions
+    
+    
 if __name__ == '__main__':
 
 
@@ -213,14 +247,32 @@ if __name__ == '__main__':
     # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
     trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
-    # Inference part
-    model = torch.load(f'./models/{cfg.model.saved_name}.pt')
-    predictions = trainer.predict(model=model, datamodule=dataloader)
-
+        # Inference part
+    # 저장된 모델로 예측을 진행합니다.
+    model_names = ['tunib50_BS_32_LR_5e-06', 'tunib50_BS_32_LR_1e-05','tunib30_BS_32_LR_1e-05','tunib30_BS_16_LR_1e-05','tunib_32_BS_30_ep_1e-05_bt_eda']
+    weights = [1,1,1,1,2]
+    
+    predictions = weighted_voting(model_names, weights, trainer, dataloader)
+    #model = torch.load('./models/tunib50_BS_32_LR_5e-06.pt')
+    #predictions = trainer.predict(model=model, datamodule=dataloader)
     # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
-    predictions = list(round(float(i), 1) for i in torch.cat(predictions))
+    #predictions = list(round(float(i), 1) for i in torch.cat(predictions))
 
     # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
     output = pd.read_csv('../data/sample_submission.csv')
+    #output = pd.read_csv('../data/dev.csv')
     output['target'] = predictions
-    output.to_csv('output.csv', index=False)
+    output.to_csv('tunib_weighted_voting5_test.csv', index=False)
+
+    # Inference part
+    #model = torch.load(f'./models/{cfg.model.saved_name}.pt')
+    #predictions = trainer.predict(model=model, datamodule=dataloader)
+
+    # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
+    #predictions = list(round(float(i), 1) for i in torch.cat(predictions))
+
+    # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
+    #output = pd.read_csv('../data/dev_preprocessed.csv')
+    #output['target'] = predictions
+    #output.to_csv('output_dev.csv', index=False)
+

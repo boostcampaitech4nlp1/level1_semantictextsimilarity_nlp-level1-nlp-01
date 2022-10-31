@@ -11,6 +11,7 @@ from selenium.webdriver.common.by import By
 from tqdm import trange, tqdm
 import argparse
 from emoji import core
+import csv
 
 chrome_options = webdriver.ChromeOptions()
 chrome_options.add_argument('--headless')
@@ -26,7 +27,7 @@ def translation(sentence, sk='ko', tk='en'):
     """
     sentence = core.replace_emoji(sentence, replace='')
     driver.get(f'https://papago.naver.com/?sk={sk}&tk={tk}')
-    driver.implicitly_wait(5)
+    driver.implicitly_wait(7)
 
     input_box = driver.find_element(By.CSS_SELECTOR, '#sourceEditArea textarea')
     input_box.clear(); input_box.clear();      
@@ -69,23 +70,31 @@ if __name__ == '__main__':
     sentence2 = augment_df['sentence_2'].copy()
     sentence2_new = []
     
+    f = open('bt1_single.csv', 'w')
+    writer = csv.writer(f)
+    
     for s in tqdm(sentence1):
         #print('*')
         eng = translation(s, 'ko', 'en')
         kor = translation(eng, 'en', 'ko')
         print(s,'|',kor)
         sentence1_new.append(kor)
-
-    pd.DataFrame(sentence1_new).to_csv('bt1_single.csv')
+        writer.writerow(kor)
     
+    f.close()
+    #pd.DataFrame(sentence1_new).to_csv('bt1_single.csv')
+    
+    f2 = open('bt2_single.csv', 'w')
+    writer2 = csv.writer(f2)
     for s in tqdm(sentence2):
         #print('*')
         eng = translation(s, 'ko', 'en')
         kor = translation(eng, 'en', 'ko')
         print(s,'|',kor)
         sentence2_new.append(kor)
-
-    pd.DataFrame(sentence2_new).to_csv('bt2_single.csv')
+        writer2.writerow(kor)
+    f2.close()
+    #pd.DataFrame(sentence2_new).to_csv('bt2_single.csv')
     
     backtranslate_1_df = augment_df.copy()
     backtranslate_1_df['sentence_1'] = sentence1_new
