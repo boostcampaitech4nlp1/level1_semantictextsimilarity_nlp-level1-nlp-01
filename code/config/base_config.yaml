@@ -31,8 +31,8 @@ train:
     R_drop_alpha : 1 # default : 1
 
 inference:
-    ensemble : False # List or False
-
+    ensemble : # List or False # 
+    weighted_ensemble : # List or False
 repo:
   entity: nlp_level1_team1
   project_name: ??? # (Required value) Need to specify your project name
