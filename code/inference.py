@@ -273,7 +273,10 @@ if __name__ == '__main__':
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
             # Inference part
-            model = Model.load_from_checkpoint(checkpoint_path=f'models/{each}.ckpt')
+            if each.endswith('.ckpt'):
+                model = Model.load_from_checkpoint(checkpoint_path=f'models/{each}')
+            else:
+                model = torch.load('models/' + each)
             each_pred = trainer.predict(model=model, datamodule=dataloader)
             each_pred = torch.cat(each_pred)
             tmp_sum += each_pred
