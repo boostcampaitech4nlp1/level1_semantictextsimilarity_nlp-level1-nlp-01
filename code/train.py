@@ -107,14 +107,17 @@ class Dataloader(pl.LightningDataModule):
             if self.k_fold:
                 # Split train data only K-times
                 train_data = pd.read_csv(self.train_path)
+                dev_data = pd.read_csv(self.dev_path)
+                total_data = pd.concat([train_data,dev_data]).reset_index(drop=True)
+
                 kf = KFold(n_splits = self.k_fold, shuffle=self.shuffle, random_state=cfg.train.seed)
-                all_splits = [k for k in kf.split(train_data)]
+                all_splits = [k for k in kf.split(total_data)]
 
                 train_indexes, val_indexes = all_splits[self.k]
                 train_indexes, val_indexes = train_indexes.tolist(), val_indexes.tolist()
 
-                train_inputs, train_targets = self.preprocessing(train_data.loc[train_indexes])
-                val_inputs, val_targets = self.preprocessing(train_data.loc[val_indexes])
+                train_inputs, train_targets = self.preprocessing(total_data.loc[train_indexes])
+                val_inputs, val_targets = self.preprocessing(total_data.loc[val_indexes])
 
                 self.train_dataset = Dataset(train_inputs,train_targets)
                 self.val_dataset = Dataset(val_inputs, val_targets)
@@ -302,12 +305,15 @@ if __name__ == '__main__':
             wandb_logger = WandbLogger(name=f'{cfg.model.saved_name}_{str(k)}th_fold', project=cfg.repo.project_name)
             wandb.watch(model)
 
+            # Learning rate monitor
+            lr_monitor = LearningRateMonitor(logging_interval='step')
+
             trainer = pl.Trainer(gpus=cfg.train.gpus, 
                                 max_epochs=cfg.train.max_epoch,
                                 log_every_n_steps=cfg.train.logging_step,
                                 precision=cfg.train.precision,
                                 logger=wandb_logger,
-                                callbacks=[checkpoint_callback])
+                                callbacks=[checkpoint_callback, lr_monitor])
 
             trainer.fit(model=model, datamodule=dataloader)
             test_pearson_corr = trainer.test(model=model, datamodule=dataloader)
