@@ -127,21 +127,21 @@ class Dataloader(pl.LightningDataModule):
 
 
 class Model(pl.LightningModule):
-    def __init__(self, cfgs):
+    def __init__(self,cfgs):
         super().__init__()
         self.save_hyperparameters()
 
         self.model_name = cfgs.model.model_name
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
-        self.warmup_ratio = cfgs.train.warmup_ratio
 
+        # 사용할 모델을 호출합니다.
         self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
             num_labels=1,
             hidden_dropout_prob=self.drop_out,
             attention_probs_dropout_prob=self.drop_out)
-
+        # Loss 계산을 위해 사용될 L1Loss를 호출합니다.
         self.loss_func = torch.nn.L1Loss()
 
     def forward(self, x):
@@ -154,52 +154,78 @@ class Model(pl.LightningModule):
         logits = self(x)
         loss = self.loss_func(logits, y.float())
         self.log("train_loss", loss)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
         loss = self.loss_func(logits, y.float())
-
         self.log("val_loss", loss)
-        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
-        self.log("val_pearson", pearson_corr)
 
-        return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
+        self.log("val_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
+
+        return loss
 
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
 
-        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
-        self.log("test_pearson", test_pearson_corr)
-        return test_pearson_corr
+        self.log("test_pearson", torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze()))
 
     def predict_step(self, batch, batch_idx):
         x = batch
         logits = self(x)
+
         return logits.squeeze()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        return optimizer
 
-        scheduler = transformers.get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
-            num_training_steps=self.trainer.estimated_stepping_batches,
-        )
+def get_trainer_dataloader(model_name, cfg):    
+    cfg.model.model_name = model_name
+    dataloader = Dataloader(cfg)
+    trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
+    return dataloader, trainer
 
-        return [optimizer], [scheduler]
+def get_cfg(name, cfg):
+    if 'tunib' in name:
+        cfg.model.model_name = 'tunib/electra-ko-en-base'
+    elif 'roberta' in name:
+        cfg.model.model_name = 'klue/roberta-large'
+    return cfg
 
-
-def soft_voting(model_names, trainer, dataloader):
-    models = torch.nn.ModuleList()
-    for name in model_names:
-        models.append(torch.load(f'./models/{name}.pt'))
+def get_name(name, i):
+    name = str(i)
+    if 'tunib' in name:
+        name = 'tunib'+name
+    elif 'roberta' in name:
+        name = 'roberta'+name
+    return name
+    
+def soft_voting(model_names, cfg):
+    models = torch.nn.ModuleDict()
+    roberta_dataloader, roberta_trainer = get_trainer_dataloader('klue/roberta-large', cfg)
+    tunib_dataloader, tunib_trainer = get_trainer_dataloader('tunib/electra-ko-en-base', cfg)
+    
+    for i,name in enumerate(model_names):
+        if '.ckpt' in name:
+            #checkpoint = torch.load(f'./models/{name}')
+            #model = Model(get_cfg(name, cfg))
+            #model.load_state_dict(checkpoint['model'])
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{name}')
+            models[get_name(name,i)] = model
+        elif '.pt' in name:
+            models[get_name(name,i)] = torch.load(f'./models/{name}')
 
     predictions = []
-    for model in models:
-        predict = trainer.predict(model=model, datamodule=dataloader)
+    for model_name in models:
+        model = models[model_name]
+        if 'tunib' in name:
+            predict = tunib_trainer.predict(model=model, datamodule=tunib_dataloader)
+        elif 'roberta' in name:
+            predict = roberta_trainer.predict(model=model, datamodule=roberta_dataloader)
         predict = list(float(i) for i in torch.cat(predict))
         predictions.append(predict)
 
@@ -209,24 +235,40 @@ def soft_voting(model_names, trainer, dataloader):
     
     return vote_predictions
 
-
-def weighted_voting(model_names, weights, trainer, dataloader):
-    models = torch.nn.ModuleList()
-    for name in model_names:
-        models.append(torch.load(f'./models/{name}.pt'))
+def weighted_voting(model_names, weights, cfg):
+    models = torch.nn.ModuleDict()
+    roberta_dataloader, roberta_trainer = get_trainer_dataloader('klue/roberta-large', cfg)
+    tunib_dataloader, tunib_trainer = get_trainer_dataloader('tunib/electra-ko-en-base', cfg)
+    
+    for i,name in enumerate(model_names):
+        if '.ckpt' in name:
+            #checkpoint = torch.load(f'./models/{name}')
+            #model = Model(get_cfg(name, cfg))
+            #model.load_state_dict(checkpoint['model'])
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{name}')
+            models[get_name(name,i)] = model
+        elif '.pt' in name:
+            models[get_name(name,i)] = torch.load(f'./models/{name}')
 
     predictions = []
-    for idx,model in enumerate(models):
-        predict = trainer.predict(model=model, datamodule=dataloader)
+    for idx, model_name in enumerate(models):
+        model = models[model_name]
+        if 'tunib' in name:
+            predict = tunib_trainer.predict(model=model, datamodule=tunib_dataloader)
+        elif 'roberta' in name:
+            predict = roberta_trainer.predict(model=model, datamodule=roberta_dataloader)
         predict = list(float(i)*weights[idx] for i in torch.cat(predict))
         predictions.append(predict)
 
     vote_predictions = np.sum(np.array(predictions), axis=0)/sum(weights)
     vote_predictions = torch.from_numpy(vote_predictions)
     vote_predictions = list(round(float(i), 1) for i in vote_predictions)
-
-
+    
+    return vote_predictions
+    
+    
 if __name__ == '__main__':
+
 
     # receive arguments 
     parser = argparse.ArgumentParser()
@@ -235,52 +277,61 @@ if __name__ == '__main__':
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
     parser = argparse.ArgumentParser()
 
-    # # seed everything
+    # seed everything
     seed_everything(cfg.train.seed)
+    print(cfg)
+    
+
+    # parser.add_argument('--model_name', default='klue/roberta-base', type=str)
+    # parser.add_argument('--batch_size', default=8, type=int)
+    # parser.add_argument('--max_epoch', default=30, type=int)
+    # parser.add_argument('--shuffle', default=True)
+    # parser.add_argument('--learning_rate', default=1e-5, type=float)
+    # parser.add_argument('--train_path', default='../data/train.csv')
+    # parser.add_argument('--dev_path', default='../data/dev.csv')
+    # parser.add_argument('--test_path', default='../data/dev.csv')
+    # parser.add_argument('--predict_path', default='../data/test.csv')
+    # args = parser.parse_args()
 
     # Load dataloader & model
-    dataloader = Dataloader(cfg)
-
-    # Pred using a single model
-    if not cfg.inference.ensemble:
-
-        trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
-
-        # Inference part
-        model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
-
-        predictions = trainer.predict(model=model, datamodule=dataloader)
-
-        # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
-        predictions = list(round(float(i), 1) for i in torch.cat(predictions))
-
-        # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
-        output = pd.read_csv('../data/sample_submission.csv')
-        output['target'] = predictions
-        output.to_csv('output.csv', index=False)
+    #dataloader = Dataloader(cfg)
+    # gpu가 없으면 'gpus=0'을, gpu가 여러개면 'gpus=4'처럼 사용하실 gpu의 개수를 입력해주세요
+    #trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
     
-    # Pred using ensemble
-    else:
+        # Inference part
+    # 저장된 모델로 예측을 진행합니다.
+    #model_names = ['tunib50_BS_32_LR_5e-06.pt', 'tunib_32_BS_30_ep_1e-05_bt_eda.pt','(92.17)roberta-large_20_BS_16_LR_3e-06.pt','(90.93) roberta-large_15_BS_16_LR_3e-06_bt_sep.pt']
+    #model_names = ['tunib30_BS_16_LR_1e-05.pt','(92.17)roberta-large_20_BS_16_LR_3e-06.pt','(90.93) roberta-large_15_BS_16_LR_3e-06_bt_sep.pt']
+    #weights = [1,2,2]
+    model_names = ['(90.93) roberta-large_15_BS_16_LR_3e-06_bt_sep.pt','(92.17)roberta-large_20_BS_16_LR_3e-06.pt']
+    weights = [1,4]
+    
+    predictions = weighted_voting(model_names, weights, cfg)
+    #model = torch.load('./models/tunib50_BS_32_LR_5e-06.pt')
+    #predictions = trainer.predict(model=model, datamodule=dataloader)
+    # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
+    #predictions = list(round(float(i), 1) for i in torch.cat(predictions))
 
-        output = pd.read_csv('../data/sample_submission.csv')
-        length = len(output)
+    # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
+    '''roberta_dataloader, roberta_trainer = get_trainer_dataloader('klue/roberta-large', cfg)
+    model = torch.load('./models/(92.17)roberta-large_20_BS_16_LR_3e-06.pt')
+    predictions = roberta_trainer.predict(model=model, datamodule=roberta_dataloader)
+    predictions = list(round(float(i), 1) for i in torch.cat(predictions))'''
+    
+    output = pd.read_csv('../data/sample_submission.csv')
+    #output = pd.read_csv('../data/dev.csv')
+    output['target'] = predictions
+    output.to_csv('roberta13_test.csv', index=False)
 
-        # make void tensor to store each model's predictions
-        tmp_sum = torch.zeros((length,),dtype=torch.float32)
+    # Inference part
+    #model = torch.load(f'./models/{cfg.model.saved_name}.pt')
+    #predictions = trainer.predict(model=model, datamodule=dataloader)
 
-        for each in cfg.inference.ensemble:
+    # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
+    #predictions = list(round(float(i), 1) for i in torch.cat(predictions))
 
-            trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
+    # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
+    #output = pd.read_csv('../data/dev_preprocessed.csv')
+    #output['target'] = predictions
+    #output.to_csv('output_dev.csv', index=False)
 
-            # Inference part
-            model = Model.load_from_checkpoint(checkpoint_path=f'models/{each}.ckpt')
-            each_pred = trainer.predict(model=model, datamodule=dataloader)
-            each_pred = torch.cat(each_pred)
-            tmp_sum += each_pred
-
-        # divide total_sum by the number of models
-        tmp_sum = tmp_sum / len(cfg.inference.ensemble)
-        predictions = list(round(float(i), 1) for i in tmp_sum)
-
-        output['target'] = predictions
-        output.to_csv('output.csv', index=False)

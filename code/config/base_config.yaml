@@ -1,8 +1,8 @@
 path:
-    train_path: ../data/train_bt_eda_except_zero.csv
-    dev_path: ../data/dev_preprocessed.csv
-    test_path: ../data/dev_preprocessed.csv
-    predict_path: ../data/test_preprocessed.csv
+    train_path: ../data/train.csv
+    dev_path: ../data/dev.csv
+    test_path: ../data/dev.csv
+    predict_path: ../data/test.csv
 
 data:
     shuffle: True
@@ -11,20 +11,28 @@ data:
     max_length : 128
     
 model:
-    model_name: tunib/electra-ko-en-base # (Required)
-    saved_name: tunib_16_BS_30_ep_1e-05_bt_eda # (Required)
+    model_name: ??? # (Required)
+    saved_name: ??? # (Required)
 
 train:
-    seed: 42
+    seed: 2022
     gpus: 1
-    batch_size: 15
-    max_epoch: 30
+    batch_size: 8
+    max_epoch: 3
     learning_rate: 1e-5
     logging_step: 1
     drop_out: 0.1
     precision: 32 # [32(default), 16]
-    k_fold : 0
+    k_fold : 0 # default : 0 => not using
+    warmup_ratio : 0 # default : 0
+    loss_function : torch.nn.SmoothL1Loss
+    optimizer : AdamW # [AdamW, Adam, SGD, RAdam]
+    R_drop : False
+    R_drop_alpha : 1 # default : 1
+
+inference:
+    ensemble : False # List or False
 
 repo:
-  entity: nlp_level1_team1_2
-  project_name: hyejin_test2 # (Required value) Need to specify your project name
+  entity: nlp_level1_team1
+  project_name: ??? # (Required value) Need to specify your project name
