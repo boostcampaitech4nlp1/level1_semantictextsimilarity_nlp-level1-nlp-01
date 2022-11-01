@@ -7,6 +7,7 @@
 - Code review: 양봉석, 임성근 <br>
 <br>
 <br>
+
 # Model
 
 |Model|huggingface_model_name|github|
@@ -51,5 +52,5 @@ python code/preprocessing.py
 
 # Inference
 1. 학습 때 사용했던 config 파일을 `inference.py`에 인자로 넣어서 추론을 진행합니다.
-`python code/inference.py --my_config`
+`python code/inference.py --config my_config`
 2. config 파일의 `Inference` 세팅을 이용하면 여러 모델끼리의 ensemble도 수행해볼 수 있습니다.
