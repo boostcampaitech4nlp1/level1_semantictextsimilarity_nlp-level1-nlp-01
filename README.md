@@ -8,15 +8,18 @@
 <br>
 <br>
 # Model
+
 |Model|huggingface_model_name|github|
 |:---|:---|:---|
-|KLUE-RoBERTa-large|klue/roberta-large|https://github.com/KLUE-benchmark/KLUE|
-|TUNiB-Electra-ko-base|tunib/electra-ko-base|https://github.com/tunib-ai/tunib-electra|
-|KoELECTRA-base-v3|monologg/koelectra-base-v3-discriminator|https://github.com/monologg/KoELECTRA/blob/master/README_EN.md|<br>
+| KLUE-RoBERTa-large | klue/roberta-large | https://github.com/KLUE-benchmark/KLUE |
+| TUNiB-Electra-ko-base | tunib/electra-ko-base | https://github.com/tunib-ai/tunib-electra |
+| KoELECTRA-base-v3 | monologg/koelectra-base-v3-discriminator | https://github.com/monologg/KoELECTRA/blob/master/README_EN.md |<br>
 <br>
+
 # Dataset
 Boostcamp 4기 내부 대회용 STS 데이터셋을 사용합니다. (비공개) <br>
 <br>
+
 ## 전처리
 데이터셋 전처리는 다음과 같이 진행합니다.
 ```
@@ -35,12 +38,13 @@ python code/preprocessing.py
 
 # Train
 학습은 다음과 같이 진행합니다.
-1. config 파일 만들기: 
 <br>
-`./code/config/base_config.yaml` 파일의 양식과 같이 학습 데이터, 사용할 모델, hyperparameter, wandb log 주소 등을 지정해 준 `my_config.yaml` 파일을 만들어줍니다.
 
-2. 학습 수행
+## 1. config 파일 만들기
+`./code/config/base_config.yaml` 파일의 양식과 같이 학습 데이터, 사용할 모델, hyperparameter, wandb log 주소 등을 지정해 준 `my_config.yaml` 파일을 만들어줍니다.
 <br>
+
+## 2. 학습 수행
 터미널 창에 `python train.py --my_config`을 입력하여 학습을 진행합니다. config 파일에 입력된 설정으로 학습이 진행됩니다. 학습이 모두 완료되면 dev set에 대한 pearson correlation 점수가 가장 높은 모델이 `./code/models/` 에 저장됩니다.
 <br>
 <br>
