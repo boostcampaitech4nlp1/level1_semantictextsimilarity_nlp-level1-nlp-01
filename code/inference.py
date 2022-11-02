@@ -271,7 +271,7 @@ if __name__ == '__main__':
     
     # Pred using ensemble
     else:
-        if not cfg.inference.weighted_ensemble:
+        if not cfg.inference.weighted_ensemble: # soft voting
             length = len(output)
 
             # make void tensor to store each model's predictions
@@ -297,10 +297,9 @@ if __name__ == '__main__':
             output['target'] = predictions
             output.to_csv('output.csv', index=False)
 
-        else: #Weighted ensemble
+        else: #Weighted voting ensemble
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
             weights = cfg.inference.weighted_ensemble
             vote_predictions = weighted_voting(cfg.inference.ensemble, weights, trainer, dataloader)
             output['target'] = vote_predictions
             output.to_csv('output.csv', index=False)
-
