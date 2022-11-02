@@ -60,7 +60,7 @@ class Dataloader(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=128)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=256)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
@@ -74,7 +74,7 @@ class Dataloader(pl.LightningDataModule):
         for idx, item in tqdm(dataframe.iterrows(), desc='tokenizing', total=len(dataframe)):
             # 두 입력 문장을 [SEP] 토큰으로 이어붙여서 전처리합니다.
             text = '[SEP]'.join([item[text_column] for text_column in self.text_columns])
-            outputs = self.tokenizer(text, add_special_tokens=True, padding='max_length', truncation=True)
+            outputs = self.tokenizer(text, add_special_tokens=True, max_length=256, padding='max_length', truncation=True)
             data.append(outputs['input_ids'])
         return data
 
@@ -137,9 +137,28 @@ class Dataloader(pl.LightningDataModule):
             predict_data = pd.read_csv(self.predict_path)
             predict_inputs, predict_targets = self.preprocessing(predict_data)
             self.predict_dataset = Dataset(predict_inputs, [])
-
+    
+    
+    def collate_fn(self, batch):
+        data_list, label_list = [], []
+        
+        maxl = 0
+        for _data, _label in batch:
+            if 0 not in _data.tolist():
+                #print(_data)
+                maxl = 256
+            elif _data.tolist().index(0) > maxl: 
+                maxl = _data.tolist().index(0)
+            data_list.append(_data)
+            label_list.append(_label)
+            
+        for i,_data in enumerate(data_list):
+            data_list[i] = _data[:maxl]
+            
+        return torch.stack(data_list, dim=0).long(), torch.stack(label_list, dim=0).long()
+    
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=self.shuffle)
+        return torch.utils.data.DataLoader(self.train_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size, shuffle=self.shuffle)
 
     def val_dataloader(self):
         return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
@@ -170,6 +189,7 @@ class Model(pl.LightningModule):
         try:  
             self.loss_func = load_obj(cfgs.train.loss_function)()
         except:
+            print("smooth_L1_loss")
             self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
     def forward(self, x):
