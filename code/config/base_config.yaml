@@ -26,6 +26,7 @@ train:
     k_fold : 0 # default : 0 => not using
     warmup_ratio : 0 # default : 0
     loss_function : torch.nn.SmoothL1Loss
+    smart_loss: # True or Fasle
     optimizer : AdamW # [Adam, AdamW, RMSprop, NAdam, RAdam]
     R_drop : False
     R_drop_alpha : 1 # default : 1

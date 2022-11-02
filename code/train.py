@@ -23,8 +23,13 @@ from pytorch_lightning.utilities.seed import seed_everything
 from omegaconf import OmegaConf
 #from pytorch_lightning.callbacks import Callback
 
-from utils import optimizer_selector
+from utils import optimizer_selector, SMARTLoss
 from load import load_obj
+
+# For smart Loss
+from torch import nn
+from itertools import count 
+import os
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -176,6 +181,19 @@ class Model(pl.LightningModule):
         except:
             self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
+        # For smart_loss
+        if cfg.train.smart_loss:
+            def eval_fn(embed):
+                outputs = self.plm.roberta(inputs_embeds=embed, attention_mask=None)
+                pooled = outputs[0] 
+                logits = self.plm.classifier(pooled) 
+                return logits 
+            def reg_loss_fn(p, q):
+                return ((p-q)**2).mean()
+
+            self.eval_fn = eval_fn
+            self.regularizer = SMARTLoss(eval_fn=eval_fn, loss_fn=reg_loss_fn)
+
     def forward(self, x):
         x = self.plm(x)['logits']
 
@@ -196,6 +214,17 @@ class Model(pl.LightningModule):
             self.log("train_loss", loss)
             return loss
 
+        elif cfg.train.smart_loss:
+            x, y = batch
+            logits = self(x)
+            # Apply loss
+            loss = self.loss_func(logits, y.float())
+            embed = self.plm.roberta.embeddings.word_embeddings(x)
+            state = self.eval_fn(embed)
+            smart_loss = self.regularizer(embed, state)
+            smart_loss = loss + 0.02 * smart_loss
+            return smart_loss
+        
         else:
             x, y = batch
             logits = self(x)

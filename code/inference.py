@@ -231,7 +231,7 @@ def weighted_voting(model_names, weights, trainer, dataloader):
 
     vote_predictions = np.sum(np.array(predictions), axis=0)/sum(weights)
     vote_predictions = torch.from_numpy(vote_predictions)
-    vote_predictions = list(round(float(i), 1) for i in vote_predictions)
+    vote_predictions = list(norm_pred(round(float(i), 1)) for i in vote_predictions)
 
 
     return vote_predictions
@@ -253,6 +253,15 @@ if __name__ == '__main__':
     # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
     output = pd.read_csv('../data/sample_submission.csv')
 
+    # normalizing predictions
+    def norm_pred(prediction):
+        if prediction > 5.0:
+            return 5.0
+        elif prediction < 0.0:
+            return 0.0
+        else:
+            return prediction
+
     # Pred using a single model
     if not cfg.inference.ensemble:
 
@@ -264,7 +273,7 @@ if __name__ == '__main__':
         predictions = trainer.predict(model=model, datamodule=dataloader)
 
         # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
-        predictions = list(round(float(i), 1) for i in torch.cat(predictions))
+        predictions = list(norm_pred(round(float(i), 1)) for i in torch.cat(predictions))
 
         output['target'] = predictions
         output.to_csv('output.csv', index=False)
@@ -292,7 +301,7 @@ if __name__ == '__main__':
 
             # divide total_sum by the number of models
             tmp_sum = tmp_sum / len(cfg.inference.ensemble)
-            predictions = list(round(float(i), 1) for i in tmp_sum)
+            predictions = list(norm_pred(round(float(i), 1)) for i in tmp_sum)
 
             output['target'] = predictions
             output.to_csv('output.csv', index=False)
