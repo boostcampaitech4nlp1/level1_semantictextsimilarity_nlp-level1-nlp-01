@@ -268,6 +268,9 @@ if __name__ == '__main__':
                                             monitor="val_pearson",
                                             mode='max')   
 
+        # Learning rate monitor
+        lr_monitor = LearningRateMonitor(logging_interval='step')
+
         # Train & Test
         trainer = pl.Trainer(gpus=cfg.train.gpus, 
                             max_epochs=cfg.train.max_epoch,
@@ -275,9 +278,6 @@ if __name__ == '__main__':
                             precision=cfg.train.precision,
                             logger=wandb_logger,
                             callbacks=[checkpoint_callback, lr_monitor])
-
-        # Learning rate monitor
-        lr_monitor = LearningRateMonitor(logging_interval='step')
 
         trainer.fit(model=model, datamodule=dataloader)
         trainer.test(model=model, datamodule=dataloader)
