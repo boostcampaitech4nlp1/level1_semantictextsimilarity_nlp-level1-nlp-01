@@ -250,7 +250,7 @@ if __name__ == '__main__':
 
     # seed everything
     seed_everything(cfg.train.seed)
-
+    
     if not cfg.train.k_fold:
 
         # Load dataloader & model
