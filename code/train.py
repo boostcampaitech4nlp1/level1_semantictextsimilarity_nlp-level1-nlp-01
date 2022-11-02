@@ -249,8 +249,8 @@ if __name__ == '__main__':
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
 
     # seed everything
-    # seed_everything(cfg.train.seed)
-
+    seed_everything(cfg.train.seed)
+    
     if not cfg.train.k_fold:
 
         # Load dataloader & model
