@@ -12,7 +12,7 @@ data:
     
 model:
     model_name: klue/roberta-large # (Required)
-    saved_name: roberta-large_15_BS_16_LR_3e-06_L1 # (Required)
+    saved_name: ??? # (Required)
 
 train:
     seed: 2022
@@ -31,7 +31,7 @@ train:
     R_drop_alpha : 1 # default : 1
 inference:
     ensemble : # List or False
-
+    weighted_ensemble : # List or False
 repo:
-  entity: nlp_level1_team1
-  project_name: bongseok_test # (Required value) Need to specify your project name
+  entity: ???
+  project_name: ??? # (Required value) Need to specify your project name
