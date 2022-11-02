@@ -12,20 +12,20 @@ data:
     
 model:
     model_name: klue/roberta-large # (Required)
-    saved_name: roberta-large # (Required)
+    saved_name: ??? # (Required)
 
 train:
     seed: 2022
     gpus: 1
     batch_size: 16
     max_epoch: 15
-    learning_rate: 2e-6
+    learning_rate: 3e-6
     logging_step: 1
-    drop_out: 0.2
+    drop_out: 0.1
     precision: 16 # [32(default), 16]
     k_fold : 0 # default : 0 => not using
     warmup_ratio : 0 # default : 0
-    loss_function : torch.nn.SmoothL1Loss
+    loss_function : torch.nn.L1Loss
     optimizer : AdamW # [AdamW, Adam, SGD, RAdam]
     smart_loss: # True or Fasle
     R_drop : False
@@ -34,5 +34,5 @@ inference:
     ensemble : # List or False
     weighted_ensemble : # List or False
 repo:
-    entity: nlp_level1_team1_2
-    project_name: SG_test # (Required value) Need to specify your project name
+  entity: ???
+  project_name: ??? # (Required value) Need to specify your project name
