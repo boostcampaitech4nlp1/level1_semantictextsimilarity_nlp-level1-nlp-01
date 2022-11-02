@@ -4,6 +4,7 @@ import random
 import torch
 import os
 import torch.nn.functional as F
+from torch import nn
 from torch import Tensor
 from typing import Union, Callable
 from itertools import count 
