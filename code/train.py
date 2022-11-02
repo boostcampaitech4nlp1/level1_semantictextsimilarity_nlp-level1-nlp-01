@@ -298,7 +298,7 @@ if __name__ == '__main__':
                                             mode='max')   
 
         # Learning rate monitor
-        lr_monitor = LearningRateMonitor(logging_interval='step')
+        lr_monitor = LearningRateMonitor(logging_interval='step')                                    
 
         # Train & Test
         trainer = pl.Trainer(gpus=cfg.train.gpus, 
