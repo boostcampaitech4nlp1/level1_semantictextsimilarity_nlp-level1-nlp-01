@@ -1,0 +1,37 @@
+path:
+    train_path: ../data/preprocessed/train_swap_preprocessed.csv
+    dev_path: ../data/preprocessed/dev_preprocessed.csv
+    test_path: ../data/preprocessed/dev_preprocessed.csv
+    predict_path: ../data/test_preprocessed.csv
+
+data:
+    shuffle: True
+    augmentation: # adea, bt 등등
+    use_prepro : False
+    max_length : 128
+    
+model:
+    model_name: klue/roberta-large # (Required)
+    saved_name: roberta-large_15_BS_16_LR_3e-06_L1 # (Required)
+
+train:
+    seed: 2022
+    gpus: 1
+    batch_size: 16
+    max_epoch: 15
+    learning_rate: 3e-6
+    logging_step: 1
+    drop_out: 0.1
+    precision: 16 # [32(default), 16]
+    k_fold : 0 # default : 0 => not using
+    warmup_ratio : 0 # default : 0
+    loss_function : torch.nn.L1Loss
+    optimizer : AdamW # [AdamW, Adam, SGD, RAdam]
+    R_drop : False
+    R_drop_alpha : 1 # default : 1
+inference:
+    ensemble : # List or False
+
+repo:
+  entity: nlp_level1_team1
+  project_name: bongseok_test # (Required value) Need to specify your project name
