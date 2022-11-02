@@ -75,7 +75,7 @@ class Dataloader(pl.LightningDataModule):
         for idx, item in tqdm(dataframe.iterrows(), desc='tokenizing', total=len(dataframe)):
             # 두 입력 문장을 [SEP] 토큰으로 이어붙여서 전처리합니다.
             text = '[SEP]'.join([item[text_column] for text_column in self.text_columns])
-            outputs = self.tokenizer(text, add_special_tokens=True, padding='max_length', truncation=True)
+            outputs = self.tokenizer(text, add_special_tokens=True, max_length=128, padding='max_length', truncation=True)
             data.append(outputs['input_ids'])
         return data
 
@@ -266,10 +266,7 @@ if __name__ == '__main__':
                                             filename=f'{cfg.model.saved_name}',
                                             save_top_k=1, 
                                             monitor="val_pearson",
-                                            mode='max')
-
-        # Learning rate monitor
-        lr_monitor = LearningRateMonitor(logging_interval='step')
+                                            mode='max')   
 
         # Train & Test
         trainer = pl.Trainer(gpus=cfg.train.gpus, 
@@ -278,6 +275,9 @@ if __name__ == '__main__':
                             precision=cfg.train.precision,
                             logger=wandb_logger,
                             callbacks=[checkpoint_callback, lr_monitor])
+
+        # Learning rate monitor
+        lr_monitor = LearningRateMonitor(logging_interval='step')
 
         trainer.fit(model=model, datamodule=dataloader)
         trainer.test(model=model, datamodule=dataloader)
