@@ -143,13 +143,17 @@ class Dataloader(pl.LightningDataModule):
     def collate_fn(self, batch):
         data_list, label_list = [], []
         
+        pad = 0
+        if('roberta' in self.model_name):
+            pad = 1
+        
         maxl = 0
         for _data, _label in batch:
-            if 0 not in _data.tolist():
+            if pad not in _data.tolist():
                 #print(_data)
                 maxl = 256
-            elif _data.tolist().index(0) > maxl: 
-                maxl = _data.tolist().index(0)
+            elif _data.tolist().index(pad) > maxl: 
+                maxl = _data.tolist().index(pad)
             data_list.append(_data)
             label_list.append(_label)
             
@@ -175,15 +179,23 @@ class Model(pl.LightningModule):
     def __init__(self, cfgs):
         super().__init__()
         self.save_hyperparameters()
-
+        
+        self.cfgs = cfgs
         self.model_name = cfgs.model.model_name
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
         self.warmup_ratio = cfgs.train.warmup_ratio
-        self.dense = torch.nn.Linear(1536, 768)
+        
+        input_size = 1536
+        if('roberta' in self.model_name):
+            input_size = 2048
+        if(self.cfgs.train.cls_sep_concat == False):
+            input_size = input_size/2
+        
+        self.dense = torch.nn.Linear(input_size, 768)
         self.dropout = torch.nn.Dropout(self.drop_out)
         self.output = torch.nn.Linear(768, 1)
-
+        
         #self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
         self.plm = transformers.AutoModel.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
@@ -196,13 +208,14 @@ class Model(pl.LightningModule):
         except:
             self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
-    #def forward(self, x):
     def forward(self, input):
-        #x = self.plm(x)['logits']
-        # print(type(input), input.size()) #torch.Size([4, 256])
-        
-        sep_idx = [item.tolist().index(3) for item in input]    
-        print(sep_idx)
+        # print(type(input), input.size()) #torch.Size([4(batch_size), 256(max_len)])
+        sep = 3
+        if('roberta' in self.model_name):
+            sep = 2
+            
+        sep_idx = [item.tolist().index(sep) for item in input]    
+        #print(sep_idx)
         
         output = self.plm(input_ids=input,
             attention_mask=None,
@@ -219,7 +232,11 @@ class Model(pl.LightningModule):
         #print(sep_hidden.size()) # torch.Size([4, 768])
         
         x = torch.concat([features[:, 0, :],sep_hidden], dim=1)
-        print(x.size())
+        #print(x.size())  # torch.Size([4, 1536])
+        if(self.cfgs.train.cls_sep_concat == False):
+            x = features[:, 0, :] + sep_hidden
+            #print(x.size())  # torch.Size([4, 768])
+
         x = self.dropout(x)
         x = self.dense(x)
         x = torch.tanh(x)
@@ -294,9 +311,10 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, default='')
     args, _ = parser.parse_known_args()
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
+    cfg.train.cls_sep_concat = False
 
     # seed everything
-    # seed_everything(cfg.train.seed)
+    seed_everything(cfg.train.seed)
 
     if not cfg.train.k_fold:
 
@@ -328,6 +346,7 @@ if __name__ == '__main__':
 
         trainer.fit(model=model, datamodule=dataloader)
         trainer.test(model=model, datamodule=dataloader)
+        torch.save(model, f'{cfg.model.saved_name}.pt')
 
     else:
 

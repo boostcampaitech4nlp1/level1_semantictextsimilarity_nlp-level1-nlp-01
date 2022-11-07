@@ -17,6 +17,8 @@ code/test.py
 code/hyejin_test
 py-hanspell
 code/config/*
+code/csv
+code/models/*
 !code/config/base_config.yaml
 <<<<<<< HEAD
 code/SG_test

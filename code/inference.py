@@ -231,8 +231,12 @@ if __name__ == '__main__':
     # receive arguments 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='')
+    #parser.add_argument('--mode', type=str, default='')
     args, _ = parser.parse_known_args()
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
+    mode = ''
+    if(mode == 'dev'):
+        cfg.path.predict_path = '../data/dev_preprocessed.csv'
     parser = argparse.ArgumentParser()
 
     # # seed everything
@@ -247,7 +251,9 @@ if __name__ == '__main__':
         trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
         # Inference part
-        model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
+        model = Model.load_from_checkpoint(checkpoint_path=f'./models/2roberta-large_new2_32_BS_30_ep_swap.ckpt')
+        #model = torch.load(f'./models/tunib_32_BS_30_ep_1e-05_bt_eda.pt')
+        #print(cfg.model.saved_name)
 
         predictions = trainer.predict(model=model, datamodule=dataloader)
 
@@ -256,8 +262,10 @@ if __name__ == '__main__':
 
         # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
         output = pd.read_csv('../data/sample_submission.csv')
+        if(mode == 'dev'):
+            output = pd.read_csv('../data/dev.csv')
         output['target'] = predictions
-        output.to_csv('output.csv', index=False)
+        output.to_csv(f'2roberta-large_new2_32_BS_30_ep_swap_test_output.csv', index=False)
     
     # Pred using ensemble
     else:

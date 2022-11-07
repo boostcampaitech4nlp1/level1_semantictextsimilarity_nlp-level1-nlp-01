@@ -229,8 +229,8 @@ if __name__ == '__main__':
 
     # Inference part
     # 저장된 모델로 예측을 진행합니다.
-    model_names = ['tunib50_BS_32_LR_5e-06', 'tunib50_BS_32_LR_1e-05','tunib30_BS_32_LR_1e-05','tunib30_BS_16_LR_1e-05','tunib_32_BS_30_ep_1e-05_bt_eda']
-    
+    #model_names = ['tunib50_BS_32_LR_5e-06', 'tunib50_BS_32_LR_1e-05','tunib30_BS_32_LR_1e-05','tunib30_BS_16_LR_1e-05','tunib_32_BS_30_ep_1e-05_bt_eda']
+    model_names = ['tunib50_BS_32_LR_5e-06']
     predictions = soft_voting(model_names, trainer, dataloader)
     #model = torch.load('./models/tunib50_BS_32_LR_5e-06.pt')
     #predictions = trainer.predict(model=model, datamodule=dataloader)
@@ -241,4 +241,4 @@ if __name__ == '__main__':
     output = pd.read_csv('../data/sample_submission.csv')
     #output = pd.read_csv('../data/dev.csv')
     output['target'] = predictions
-    output.to_csv('tunib_soft_voting4.csv', index=False)
+    output.to_csv('tunib_50_32_5e-06.csv', index=False)
