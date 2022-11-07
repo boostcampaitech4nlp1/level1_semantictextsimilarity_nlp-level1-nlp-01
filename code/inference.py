@@ -14,6 +14,8 @@ from omegaconf import OmegaConf
 from pytorch_lightning.utilities.seed import seed_everything
 import numpy as np
 
+from load import load_obj
+
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
         self.inputs = inputs
@@ -142,7 +144,10 @@ class Model(pl.LightningModule):
             hidden_dropout_prob=self.drop_out,
             attention_probs_dropout_prob=self.drop_out)
 
-        self.loss_func = torch.nn.L1Loss()
+        try:  
+            self.loss_func = load_obj(cfgs.train.loss_function)()
+        except:
+            self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
     def forward(self, x):
         x = self.plm(x)['logits']
@@ -213,7 +218,10 @@ def soft_voting(model_names, trainer, dataloader):
 def weighted_voting(model_names, weights, trainer, dataloader):
     models = torch.nn.ModuleList()
     for name in model_names:
-        models.append(torch.load(f'./models/{name}.pt'))
+        if name.endswith('.ckpt'):
+            models.append(Model.load_from_checkpoint(checkpoint_path=f'models/{name}'))
+        else:
+            models.append(torch.load(f'./models/{name}'))
 
     predictions = []
     for idx,model in enumerate(models):
@@ -226,17 +234,15 @@ def weighted_voting(model_names, weights, trainer, dataloader):
     vote_predictions = list(round(float(i), 1) for i in vote_predictions)
 
 
+    return vote_predictions
+
 if __name__ == '__main__':
 
     # receive arguments 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='')
-    #parser.add_argument('--mode', type=str, default='')
     args, _ = parser.parse_known_args()
     cfg = OmegaConf.load(f'./config/{args.config}.yaml')
-    mode = ''
-    if(mode == 'dev'):
-        cfg.path.predict_path = '../data/dev_preprocessed.csv'
     parser = argparse.ArgumentParser()
 
     # # seed everything
@@ -244,6 +250,17 @@ if __name__ == '__main__':
 
     # Load dataloader & model
     dataloader = Dataloader(cfg)
+    # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
+    output = pd.read_csv('../data/sample_submission.csv')
+
+    # normalizing predictions
+    # def norm_pred(prediction):
+    #     if prediction > 5.0:
+    #         return 5.0
+    #     elif prediction < 0.0:
+    #         return 0.0
+    #     else:
+    #         return prediction
 
     # Pred using a single model
     if not cfg.inference.ensemble:
@@ -251,44 +268,47 @@ if __name__ == '__main__':
         trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
         # Inference part
-        model = Model.load_from_checkpoint(checkpoint_path=f'./models/2roberta-large_new2_32_BS_30_ep_swap.ckpt')
-        #model = torch.load(f'./models/tunib_32_BS_30_ep_1e-05_bt_eda.pt')
-        #print(cfg.model.saved_name)
+        model = Model.load_from_checkpoint(checkpoint_path=f'./models/{cfg.model.saved_name}.ckpt')
 
         predictions = trainer.predict(model=model, datamodule=dataloader)
 
         # 예측된 결과를 형식에 맞게 반올림하여 준비합니다.
         predictions = list(round(float(i), 1) for i in torch.cat(predictions))
 
-        # output 형식을 불러와서 예측된 결과로 바꿔주고, output.csv로 출력합니다.
-        output = pd.read_csv('../data/sample_submission.csv')
-        if(mode == 'dev'):
-            output = pd.read_csv('../data/dev.csv')
         output['target'] = predictions
-        output.to_csv(f'2roberta-large_new2_32_BS_30_ep_swap_test_output.csv', index=False)
+        output.to_csv('output.csv', index=False)
     
     # Pred using ensemble
     else:
+        if not cfg.inference.weighted_ensemble: # soft voting
+            length = len(output)
 
-        output = pd.read_csv('../data/sample_submission.csv')
-        length = len(output)
+            # make void tensor to store each model's predictions
+            tmp_sum = torch.zeros((length,),dtype=torch.float32)
 
-        # make void tensor to store each model's predictions
-        tmp_sum = torch.zeros((length,),dtype=torch.float32)
+            for each in cfg.inference.ensemble:
 
-        for each in cfg.inference.ensemble:
+                trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
 
+                # Inference part
+                if each.endswith('.ckpt'):
+                    model = Model.load_from_checkpoint(checkpoint_path=f'models/{each}')
+                else:
+                    model = torch.load('models/' + each)
+                each_pred = trainer.predict(model=model, datamodule=dataloader)
+                each_pred = torch.cat(each_pred)
+                tmp_sum += each_pred
+
+            # divide total_sum by the number of models
+            tmp_sum = tmp_sum / len(cfg.inference.ensemble)
+            predictions = list(round(float(i), 1) for i in tmp_sum)
+
+            output['target'] = predictions
+            output.to_csv('output.csv', index=False)
+
+        else: #Weighted voting ensemble
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
-
-            # Inference part
-            model = Model.load_from_checkpoint(checkpoint_path=f'models/{each}.ckpt')
-            each_pred = trainer.predict(model=model, datamodule=dataloader)
-            each_pred = torch.cat(each_pred)
-            tmp_sum += each_pred
-
-        # divide total_sum by the number of models
-        tmp_sum = tmp_sum / len(cfg.inference.ensemble)
-        predictions = list(round(float(i), 1) for i in tmp_sum)
-
-        output['target'] = predictions
-        output.to_csv('output.csv', index=False)
+            weights = cfg.inference.weighted_ensemble
+            vote_predictions = weighted_voting(cfg.inference.ensemble, weights, trainer, dataloader)
+            output['target'] = vote_predictions
+            output.to_csv('output.csv', index=False)

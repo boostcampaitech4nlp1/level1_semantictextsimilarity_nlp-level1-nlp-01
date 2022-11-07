@@ -10,6 +10,7 @@ import pytorch_lightning as pl
 
 # wandb logger for lightning
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 # preprocessing
@@ -22,8 +23,13 @@ from pytorch_lightning.utilities.seed import seed_everything
 from omegaconf import OmegaConf
 #from pytorch_lightning.callbacks import Callback
 
-from utils import optimizer_selector
+from utils import optimizer_selector, SMARTLoss
 from load import load_obj
+
+# For smart Loss
+from torch import nn
+from itertools import count 
+import os
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
@@ -60,7 +66,7 @@ class Dataloader(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=256)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=128)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
@@ -74,7 +80,7 @@ class Dataloader(pl.LightningDataModule):
         for idx, item in tqdm(dataframe.iterrows(), desc='tokenizing', total=len(dataframe)):
             # 두 입력 문장을 [SEP] 토큰으로 이어붙여서 전처리합니다.
             text = '[SEP]'.join([item[text_column] for text_column in self.text_columns])
-            outputs = self.tokenizer(text, add_special_tokens=True, max_length=256, padding='max_length', truncation=True)
+            outputs = self.tokenizer(text, add_special_tokens=True, max_length=128, padding='max_length', truncation=True)
             data.append(outputs['input_ids'])
         return data
 
@@ -106,14 +112,17 @@ class Dataloader(pl.LightningDataModule):
             if self.k_fold:
                 # Split train data only K-times
                 train_data = pd.read_csv(self.train_path)
+                dev_data = pd.read_csv(self.dev_path)
+                total_data = pd.concat([train_data,dev_data]).reset_index(drop=True)
+
                 kf = KFold(n_splits = self.k_fold, shuffle=self.shuffle, random_state=cfg.train.seed)
-                all_splits = [k for k in kf.split(train_data)]
+                all_splits = [k for k in kf.split(total_data)]
 
                 train_indexes, val_indexes = all_splits[self.k]
                 train_indexes, val_indexes = train_indexes.tolist(), val_indexes.tolist()
 
-                train_inputs, train_targets = self.preprocessing(train_data.loc[train_indexes])
-                val_inputs, val_targets = self.preprocessing(train_data.loc[val_indexes])
+                train_inputs, train_targets = self.preprocessing(total_data.loc[train_indexes])
+                val_inputs, val_targets = self.preprocessing(total_data.loc[val_indexes])
 
                 self.train_dataset = Dataset(train_inputs,train_targets)
                 self.val_dataset = Dataset(val_inputs, val_targets)
@@ -137,28 +146,9 @@ class Dataloader(pl.LightningDataModule):
             predict_data = pd.read_csv(self.predict_path)
             predict_inputs, predict_targets = self.preprocessing(predict_data)
             self.predict_dataset = Dataset(predict_inputs, [])
-    
-    
-    def collate_fn(self, batch):
-        data_list, label_list = [], []
-        
-        maxl = 0
-        for _data, _label in batch:
-            if 0 not in _data.tolist():
-                #print(_data)
-                maxl = 256
-            elif _data.tolist().index(0) > maxl: 
-                maxl = _data.tolist().index(0)
-            data_list.append(_data)
-            label_list.append(_label)
-            
-        for i,_data in enumerate(data_list):
-            data_list[i] = _data[:maxl]
-            
-        return torch.stack(data_list, dim=0).long(), torch.stack(label_list, dim=0).long()
-    
+
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size, shuffle=self.shuffle)
+        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=self.shuffle)
 
     def val_dataloader(self):
         return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
@@ -189,8 +179,20 @@ class Model(pl.LightningModule):
         try:  
             self.loss_func = load_obj(cfgs.train.loss_function)()
         except:
-            print("smooth_L1_loss")
             self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
+
+        # For smart_loss
+        if cfg.train.smart_loss:
+            def eval_fn(embed):
+                outputs = self.plm.roberta(inputs_embeds=embed, attention_mask=None)
+                pooled = outputs[0] 
+                logits = self.plm.classifier(pooled) 
+                return logits 
+            def reg_loss_fn(p, q):
+                return ((p-q)**2).mean()
+
+            self.eval_fn = eval_fn
+            self.regularizer = SMARTLoss(eval_fn=eval_fn, loss_fn=reg_loss_fn)
 
     def forward(self, x):
         x = self.plm(x)['logits']
@@ -212,6 +214,17 @@ class Model(pl.LightningModule):
             self.log("train_loss", loss)
             return loss
 
+        elif cfg.train.smart_loss:
+            x, y = batch
+            logits = self(x)
+            # Apply loss
+            loss = self.loss_func(logits, y.float())
+            embed = self.plm.roberta.embeddings.word_embeddings(x)
+            state = self.eval_fn(embed)
+            smart_loss = self.regularizer(embed, state)
+            smart_loss = loss + 0.02 * smart_loss
+            return smart_loss
+        
         else:
             x, y = batch
             logits = self(x)
@@ -244,14 +257,15 @@ class Model(pl.LightningModule):
         return logits.squeeze()
 
     def configure_optimizers(self):
-        #optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        optimizer = optimizer_selector(cfg.train.optimizer, self.parameters(), lr=self.lr)
 
-        scheduler = transformers.get_linear_schedule_with_warmup(
+        optimizer = optimizer_selector(cfg.train.optimizer, self.parameters(), lr=self.lr)
+        scheduler = transformers.get_cosine_with_hard_restarts_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=int(self.warmup_ratio*self.trainer.estimated_stepping_batches),
+            num_warmup_steps=self.warmup_ratio*self.trainer.estimated_stepping_batches,
             num_training_steps=self.trainer.estimated_stepping_batches,
         )
+
+        scheduler = {'scheduler':scheduler, 'interval':'step', 'frequency':1}
 
         return [optimizer], [scheduler]
 
@@ -265,7 +279,7 @@ if __name__ == '__main__':
 
     # seed everything
     seed_everything(cfg.train.seed)
-
+    
     if not cfg.train.k_fold:
 
         # Load dataloader & model
@@ -273,7 +287,7 @@ if __name__ == '__main__':
         model = Model(cfg)
 
         # wandb logger
-        wandb_logger = WandbLogger(name=cfg.model.saved_name, project=cfg.repo.project_name)
+        wandb_logger = WandbLogger(name=cfg.model.saved_name, project=cfg.repo.project_name, entity=cfg.repo.entity)
         wandb.watch(model)
 
         # checkpoint config
@@ -281,7 +295,10 @@ if __name__ == '__main__':
                                             filename=f'{cfg.model.saved_name}',
                                             save_top_k=1, 
                                             monitor="val_pearson",
-                                            mode='max')
+                                            mode='max')   
+
+        # Learning rate monitor
+        lr_monitor = LearningRateMonitor(logging_interval='step')                                    
 
         # Train & Test
         trainer = pl.Trainer(gpus=cfg.train.gpus, 
@@ -289,7 +306,7 @@ if __name__ == '__main__':
                             log_every_n_steps=cfg.train.logging_step,
                             precision=cfg.train.precision,
                             logger=wandb_logger,
-                            callbacks=[checkpoint_callback])
+                            callbacks=[checkpoint_callback, lr_monitor])
 
         trainer.fit(model=model, datamodule=dataloader)
         trainer.test(model=model, datamodule=dataloader)
@@ -317,12 +334,15 @@ if __name__ == '__main__':
             wandb_logger = WandbLogger(name=f'{cfg.model.saved_name}_{str(k)}th_fold', project=cfg.repo.project_name)
             wandb.watch(model)
 
+            # Learning rate monitor
+            lr_monitor = LearningRateMonitor(logging_interval='step')
+
             trainer = pl.Trainer(gpus=cfg.train.gpus, 
                                 max_epochs=cfg.train.max_epoch,
                                 log_every_n_steps=cfg.train.logging_step,
                                 precision=cfg.train.precision,
                                 logger=wandb_logger,
-                                callbacks=[checkpoint_callback])
+                                callbacks=[checkpoint_callback, lr_monitor])
 
             trainer.fit(model=model, datamodule=dataloader)
             test_pearson_corr = trainer.test(model=model, datamodule=dataloader)

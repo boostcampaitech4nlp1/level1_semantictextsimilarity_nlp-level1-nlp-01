@@ -10,7 +10,7 @@ parser.add_argument('--pred_file', type=str)
 args = parser.parse_args()
 pred_file = args.pred_file
 
-df = pd.read_csv('roberta-large_new_32_BS_30_ep_swap_ez_dev_output.csv')
+df = pd.read_csv(pred_file)
 
 # Get total pearson correlation
 pearson_corr = torchmetrics.functional.pearson_corrcoef(torch.tensor(df['target']), torch.tensor(df['label']))

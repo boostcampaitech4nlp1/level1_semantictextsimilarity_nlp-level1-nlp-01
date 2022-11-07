@@ -20,10 +20,7 @@ code/config/*
 code/csv
 code/models/*
 !code/config/base_config.yaml
-<<<<<<< HEAD
-code/SG_test
-=======
->>>>>>> c309b8d85cef6db85faf3d803a8a2056781e3f5c
+!code/config/roberta-large_base_config.yaml
 
 ### other thing ###
 .cache/
