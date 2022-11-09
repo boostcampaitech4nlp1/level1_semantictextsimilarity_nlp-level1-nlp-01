@@ -23,31 +23,21 @@ from pytorch_lightning.utilities.seed import seed_everything
 from omegaconf import OmegaConf
 #from pytorch_lightning.callbacks import Callback
 
-from utils import optimizer_selector, SMARTLoss
+from utils import optimizer_selector
 from load import load_obj
-
-# For smart Loss
-from torch import nn
-from itertools import count 
-import os
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
-        inputs = pd.DataFrame(inputs)
-        self.inputs = inputs['input_ids'].tolist()
-        self.attention_mask = inputs['attention_mask'].tolist()
-        self.token_type_ids = inputs['token_type_ids'].tolist()
+        self.inputs = inputs
         self.targets = targets
-        
 
     # 학습 및 추론 과정에서 데이터를 1개씩 꺼내오는 곳
     def __getitem__(self, idx):
         # 정답이 있다면 else문을, 없다면 if문을 수행합니다
         if len(self.targets) == 0:
-            return torch.tensor(self.inputs[idx]), torch.tensor(self.attention_mask[idx]), torch.tensor(self.token_type_ids[idx])
+            return torch.tensor(self.inputs[idx])
         else:
-            return torch.tensor(self.inputs[idx]), torch.tensor(self.attention_mask[idx]), torch.tensor(self.token_type_ids[idx]), torch.tensor(self.targets[idx])
-
+            return torch.tensor(self.inputs[idx]), torch.tensor(self.targets[idx])
 
     # 입력하는 개수만큼 데이터를 사용합니다
     def __len__(self):
@@ -60,7 +50,6 @@ class Dataloader(pl.LightningDataModule):
         self.model_name = cfg.model.model_name
         self.batch_size = cfg.train.batch_size
         self.shuffle = cfg.data.shuffle
-        self.max_length = cfg.data.max_length
 
         self.train_path = cfg.path.train_path
         self.dev_path = cfg.path.dev_path
@@ -72,7 +61,7 @@ class Dataloader(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=self.max_length)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=256)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
@@ -86,8 +75,9 @@ class Dataloader(pl.LightningDataModule):
         for idx, item in tqdm(dataframe.iterrows(), desc='tokenizing', total=len(dataframe)):
             # 두 입력 문장을 [SEP] 토큰으로 이어붙여서 전처리합니다.
             text = '[SEP]'.join([item[text_column] for text_column in self.text_columns])
-            outputs = self.tokenizer(item['sentence_1'], item['sentence_2'], add_special_tokens=True, max_length=self.max_length, padding='max_length', truncation=True)
-            data.append(outputs)
+            outputs = self.tokenizer(text, add_special_tokens=True, max_length=256, padding='max_length', truncation=True)
+            data.append(outputs['input_ids'])
+            #print('tokenizing', outputs)
         return data
 
     def preprocessing(self, data):
@@ -116,19 +106,16 @@ class Dataloader(pl.LightningDataModule):
         if stage == 'fit':
 
             if self.k_fold:
-                # 학습 데이터를 k개로 나눕니다.
+                # Split train data only K-times
                 train_data = pd.read_csv(self.train_path)
-                dev_data = pd.read_csv(self.dev_path)
-                total_data = pd.concat([train_data,dev_data]).reset_index(drop=True)
-
                 kf = KFold(n_splits = self.k_fold, shuffle=self.shuffle, random_state=cfg.train.seed)
-                all_splits = [k for k in kf.split(total_data)]
+                all_splits = [k for k in kf.split(train_data)]
 
                 train_indexes, val_indexes = all_splits[self.k]
                 train_indexes, val_indexes = train_indexes.tolist(), val_indexes.tolist()
 
-                train_inputs, train_targets = self.preprocessing(total_data.loc[train_indexes])
-                val_inputs, val_targets = self.preprocessing(total_data.loc[val_indexes])
+                train_inputs, train_targets = self.preprocessing(train_data.loc[train_indexes])
+                val_inputs, val_targets = self.preprocessing(train_data.loc[val_indexes])
 
                 self.train_dataset = Dataset(train_inputs,train_targets)
                 self.val_dataset = Dataset(val_inputs, val_targets)
@@ -154,45 +141,34 @@ class Dataloader(pl.LightningDataModule):
             self.predict_dataset = Dataset(predict_inputs, [])
 
     def collate_fn(self, batch):
-        label_list = []
-        data_list = {'input_ids':[], 'attention_mask':[], 'token_type_ids':[]}
-        pad = 0
+        data_list, label_list = [], []
+        
         maxl = 0
-        for _input, _att_mask, _tok_type_ids, _label in batch:
-            if pad not in _att_mask.tolist():
-                maxl = self.max_length
-            elif _att_mask.tolist().index(pad) > maxl: 
-                maxl = _att_mask.tolist().index(pad)
-            
-            data_list['input_ids'].append(_input)
-            data_list['attention_mask'].append(_att_mask)
-            data_list['token_type_ids'].append(_tok_type_ids)
+        for _data, _label in batch:
+            if 0 not in _data.tolist():
+                print(_data)
+                maxl = 256
+            elif _data.tolist().index(0) > maxl: 
+                maxl = _data.tolist().index(0)
+            data_list.append(_data)
             label_list.append(_label)
             
-        for k in data_list:
-            _data = data_list[k]
-            for i,v in enumerate(_data):
-                _data[i] = v[:maxl]
-        
-        feature_list = []
-        for i in range(len(data_list['input_ids'])):
-            tmp = torch.stack([data_list['input_ids'][i], data_list['attention_mask'][i], data_list['token_type_ids'][i]], dim=0).cpu()
-            feature_list.append(tmp)
-        
-        return torch.stack(feature_list, dim=0).long(), torch.tensor(label_list).long()
-
-
+        for i,_data in enumerate(data_list):
+            data_list[i] = _data[:maxl]
+            
+        return torch.stack(data_list, dim=0).long(), torch.stack(label_list, dim=0).long()
+    
     def train_dataloader(self):
         return torch.utils.data.DataLoader(self.train_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size, shuffle=self.shuffle)
 
     def val_dataloader(self):
-        return torch.utils.data.DataLoader(self.val_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
 
     def test_dataloader(self):
-        return torch.utils.data.DataLoader(self.test_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.test_dataset, batch_size=self.batch_size)
 
     def predict_dataloader(self):
-        return torch.utils.data.DataLoader(self.predict_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.predict_dataset, batch_size=self.batch_size)
 
 
 class Model(pl.LightningModule):
@@ -204,80 +180,38 @@ class Model(pl.LightningModule):
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
         self.warmup_ratio = cfgs.train.warmup_ratio
-        self.cfgs = cfgs
+        self.dense = torch.nn.Linear(768, 768)
+        self.dropout = torch.nn.Dropout(self.drop_out)
+        self.output = torch.nn.Linear(768, 1)
 
-        if(self.cfgs.train.cls_sep.lower() == "none"):
-            self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
-                pretrained_model_name_or_path=self.model_name,
-                num_labels=1,
-                hidden_dropout_prob=self.drop_out,
-                attention_probs_dropout_prob=self.drop_out)
-        else:
-            input_size = 1536
-            if('roberta' in self.model_name):
-                input_size = 2048
-            if(self.cfgs.train.cls_sep.lower() == "add"):
-                input_size = input_size/2
-            
-            self.dense = torch.nn.Linear(input_size, 768)
-            self.dropout = torch.nn.Dropout(self.drop_out)
-            self.output = torch.nn.Linear(768, 1)
-
-            self.plm = transformers.AutoModel.from_pretrained(
-                pretrained_model_name_or_path=self.model_name,
-                hidden_dropout_prob=None,
-                attention_probs_dropout_prob=None)
+        #self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
+        self.plm = transformers.AutoModel.from_pretrained(
+            pretrained_model_name_or_path=self.model_name,
+            #num_labels=1,
+            hidden_dropout_prob=self.drop_out,
+            attention_probs_dropout_prob=self.drop_out)
 
         try:  
             self.loss_func = load_obj(cfgs.train.loss_function)()
         except:
             self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
-        # smart_loss
-        if cfg.train.smart_loss:
-            def eval_fn(embed):
-                outputs = self.plm.roberta(inputs_embeds=embed, attention_mask=None)
-                pooled = outputs[0] 
-                logits = self.plm.classifier(pooled) 
-                return logits 
-            def reg_loss_fn(p, q):
-                return ((p-q)**2).mean()
+    #def forward(self, x):
+    def forward(self, input):
+        #x = self.plm(x)['logits']
+        #print('forward')
+        #print(input)
+        output = self.plm(input_ids=input,
+            attention_mask=None,
+            token_type_ids=None)
 
-            self.eval_fn = eval_fn
-            self.regularizer = SMARTLoss(eval_fn=eval_fn, loss_fn=reg_loss_fn)
-
-    def forward(self, data):
-        input_ids = data[:,0,:].long()
-        attention_mask = data[:,1,:].long()
-        token_type_ids = data[:,2,:].long()
-        
-        if(self.cfgs.train.cls_sep.lower() == "none"):
-            x = self.plm(input_ids)['logits']
-            
-        else:
-            sep = 1
-            sep_idx = [item.tolist().index(sep)-1 for item in token_type_ids]  
-            
-            output = self.plm(input_ids=input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids)
-
-            features = output[0]
-            sep_hidden = []
-            for i,item in enumerate(features):
-                sep_hidden.append(features[i,sep_idx[i],:])
-            
-            sep_hidden = torch.stack(sep_hidden, dim=0)
-            
-            x = torch.concat([features[:, 0, :],sep_hidden], dim=1)
-            if(self.cfgs.train.cls_sep.lower() == "add"):
-                x = features[:, 0, :] + sep_hidden
-                
-            x = self.dropout(x)
-            x = self.dense(x)
-            x = torch.tanh(x)
-            x = self.dropout(x)
-            x = self.output(x)['logits']
+        features = output[0]
+        x = features[:, 0, :]
+        x = self.dropout(x)
+        x = self.dense(x)
+        x = torch.tanh(x)
+        x = self.dropout(x)
+        x = self.output(x)
 
         return x
 
@@ -296,17 +230,6 @@ class Model(pl.LightningModule):
             self.log("train_loss", loss)
             return loss
 
-        elif cfg.train.smart_loss:
-            x, y = batch
-            logits = self(x)
-            # Apply loss
-            loss = self.loss_func(logits, y.float())
-            embed = self.plm.roberta.embeddings.word_embeddings(x)
-            state = self.eval_fn(embed)
-            smart_loss = self.regularizer(embed, state)
-            smart_loss = loss + 0.02 * smart_loss
-            return smart_loss
-        
         else:
             x, y = batch
             logits = self(x)
@@ -320,7 +243,7 @@ class Model(pl.LightningModule):
         loss = self.loss_func(logits, y.float())
 
         self.log("val_loss", loss)
-        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze().float())
+        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
         self.log("val_pearson", pearson_corr)
 
         return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
@@ -329,7 +252,7 @@ class Model(pl.LightningModule):
         x, y = batch
         logits = self(x)
 
-        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze().float())
+        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
         self.log("test_pearson", test_pearson_corr)
         return test_pearson_corr
 
@@ -361,7 +284,7 @@ if __name__ == '__main__':
 
     # seed everything
     seed_everything(cfg.train.seed)
-    
+
     if not cfg.train.k_fold:
 
         # Load dataloader & model
@@ -377,10 +300,10 @@ if __name__ == '__main__':
                                             filename=f'{cfg.model.saved_name}',
                                             save_top_k=1, 
                                             monitor="val_pearson",
-                                            mode='max')   
+                                            mode='max')
 
         # Learning rate monitor
-        lr_monitor = LearningRateMonitor(logging_interval='step')                                    
+        lr_monitor = LearningRateMonitor(logging_interval='step')
 
         # Train & Test
         trainer = pl.Trainer(gpus=cfg.train.gpus, 
@@ -416,15 +339,12 @@ if __name__ == '__main__':
             wandb_logger = WandbLogger(name=f'{cfg.model.saved_name}_{str(k)}th_fold', project=cfg.repo.project_name)
             wandb.watch(model)
 
-            # Learning rate monitor
-            lr_monitor = LearningRateMonitor(logging_interval='step')
-
             trainer = pl.Trainer(gpus=cfg.train.gpus, 
                                 max_epochs=cfg.train.max_epoch,
                                 log_every_n_steps=cfg.train.logging_step,
                                 precision=cfg.train.precision,
                                 logger=wandb_logger,
-                                callbacks=[checkpoint_callback, lr_monitor])
+                                callbacks=[checkpoint_callback])
 
             trainer.fit(model=model, datamodule=dataloader)
             test_pearson_corr = trainer.test(model=model, datamodule=dataloader)

@@ -35,4 +35,3 @@ print(f"##### The number of label per each group: #####\n{df.groupby('group').ap
 print("#"*40)
 print(f"\n##### pearson_corr by group: #####\n{df.groupby('group').apply(get_group_corr)}")
 
-

@@ -14,8 +14,11 @@ code/wandb/*
 code/lightning_logs/*
 code/out*
 code/test.py
+code/hyejin_test
 py-hanspell
 code/config/*
+code/csv
+code/models/*
 !code/config/base_config.yaml
 !code/config/roberta-large_base_config.yaml
 

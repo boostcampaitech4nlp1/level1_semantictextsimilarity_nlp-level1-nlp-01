@@ -18,20 +18,26 @@ from load import load_obj
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
-        self.inputs = inputs
+        inputs = pd.DataFrame(inputs)
+        self.inputs = inputs['input_ids'].tolist()
+        self.attention_mask = inputs['attention_mask'].tolist()
+        self.token_type_ids = inputs['token_type_ids'].tolist()
         self.targets = targets
+        
 
     # 학습 및 추론 과정에서 데이터를 1개씩 꺼내오는 곳
     def __getitem__(self, idx):
         # 정답이 있다면 else문을, 없다면 if문을 수행합니다
         if len(self.targets) == 0:
-            return torch.tensor(self.inputs[idx])
+            return torch.tensor(self.inputs[idx]), torch.tensor(self.attention_mask[idx]), torch.tensor(self.token_type_ids[idx])
         else:
-            return torch.tensor(self.inputs[idx]), torch.tensor(self.targets[idx])
+            return torch.tensor(self.inputs[idx]), torch.tensor(self.attention_mask[idx]), torch.tensor(self.token_type_ids[idx]), torch.tensor(self.targets[idx])
+
 
     # 입력하는 개수만큼 데이터를 사용합니다
     def __len__(self):
         return len(self.inputs)
+
 
 
 class Dataloader(pl.LightningDataModule):
@@ -64,8 +70,8 @@ class Dataloader(pl.LightningDataModule):
         for idx, item in tqdm(dataframe.iterrows(), desc='tokenizing', total=len(dataframe)):
             # 두 입력 문장을 [SEP] 토큰으로 이어붙여서 전처리합니다.
             text = '[SEP]'.join([item[text_column] for text_column in self.text_columns])
-            outputs = self.tokenizer(text, add_special_tokens=True, padding='max_length', truncation=True)
-            data.append(outputs['input_ids'])
+            outputs = self.tokenizer(item['sentence_1'], item['sentence_2'], add_special_tokens=True, max_length=self.max_length, padding='max_length', truncation=True)
+            data.append(outputs)
         return data
 
     def preprocessing(self, data):
@@ -115,17 +121,46 @@ class Dataloader(pl.LightningDataModule):
             predict_inputs, predict_targets = self.preprocessing(predict_data)
             self.predict_dataset = Dataset(predict_inputs, [])
 
+    def collate_fn(self, batch):
+        label_list = []
+        data_list = {'input_ids':[], 'attention_mask':[], 'token_type_ids':[]}
+        pad = 0
+        maxl = 0
+        for _input, _att_mask, _tok_type_ids, _label in batch:
+            if pad not in _att_mask.tolist():
+                maxl = self.max_length
+            elif _att_mask.tolist().index(pad) > maxl: 
+                maxl = _att_mask.tolist().index(pad)
+            
+            data_list['input_ids'].append(_input)
+            data_list['attention_mask'].append(_att_mask)
+            data_list['token_type_ids'].append(_tok_type_ids)
+            label_list.append(_label)
+            
+        for k in data_list:
+            _data = data_list[k]
+            for i,v in enumerate(_data):
+                _data[i] = v[:maxl]
+        
+        feature_list = []
+        for i in range(len(data_list['input_ids'])):
+            tmp = torch.stack([data_list['input_ids'][i], data_list['attention_mask'][i], data_list['token_type_ids'][i]], dim=0).cpu()
+            feature_list.append(tmp)
+        
+        return torch.stack(feature_list, dim=0).long(), torch.tensor(label_list).long()
+
+
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=cfgs.data.shuffle)
+        return torch.utils.data.DataLoader(self.train_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size, shuffle=self.shuffle)
 
     def val_dataloader(self):
-        return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.val_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
 
     def test_dataloader(self):
-        return torch.utils.data.DataLoader(self.test_dataset, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.test_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
 
     def predict_dataloader(self):
-        return torch.utils.data.DataLoader(self.predict_dataset, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.predict_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
 
 
 class Model(pl.LightningModule):
@@ -137,20 +172,67 @@ class Model(pl.LightningModule):
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
         self.warmup_ratio = cfgs.train.warmup_ratio
+        self.cfgs = cfgs
 
-        self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
-            pretrained_model_name_or_path=self.model_name,
-            num_labels=1,
-            hidden_dropout_prob=self.drop_out,
-            attention_probs_dropout_prob=self.drop_out)
+        if(self.cfgs.train.cls_sep.lower() == "none"):
+            self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
+                pretrained_model_name_or_path=self.model_name,
+                num_labels=1,
+                hidden_dropout_prob=self.drop_out,
+                attention_probs_dropout_prob=self.drop_out)
+        else:
+            input_size = 1536
+            if('roberta' in self.model_name):
+                input_size = 2048
+            if(self.cfgs.train.cls_sep.lower() == "add"):
+                input_size = input_size/2
+            
+            self.dense = torch.nn.Linear(input_size, 768)
+            self.dropout = torch.nn.Dropout(self.drop_out)
+            self.output = torch.nn.Linear(768, 1)
+
+            self.plm = transformers.AutoModel.from_pretrained(
+                pretrained_model_name_or_path=self.model_name,
+                hidden_dropout_prob=None,
+                attention_probs_dropout_prob=None)
 
         try:  
             self.loss_func = load_obj(cfgs.train.loss_function)()
         except:
             self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
-    def forward(self, x):
-        x = self.plm(x)['logits']
+    def forward(self, data):
+        input_ids = data[:,0,:].long()
+        attention_mask = data[:,1,:].long()
+        token_type_ids = data[:,2,:].long()
+        
+        if(self.cfgs.train.cls_sep.lower() == "none"):
+            x = self.plm(input_ids)['logits']
+            
+        else:
+            sep = 1
+            sep_idx = [item.tolist().index(sep)-1 for item in token_type_ids]  
+            
+            output = self.plm(input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids)
+
+            features = output[0]
+            sep_hidden = []
+            for i,item in enumerate(features):
+                sep_hidden.append(features[i,sep_idx[i],:])
+            
+            sep_hidden = torch.stack(sep_hidden, dim=0)
+            
+            x = torch.concat([features[:, 0, :],sep_hidden], dim=1)
+            if(self.cfgs.train.cls_sep.lower() == "add"):
+                x = features[:, 0, :] + sep_hidden
+                
+            x = self.dropout(x)
+            x = self.dense(x)
+            x = torch.tanh(x)
+            x = self.dropout(x)
+            x = self.output(x)['logits']
 
         return x
 
@@ -167,7 +249,7 @@ class Model(pl.LightningModule):
         loss = self.loss_func(logits, y.float())
 
         self.log("val_loss", loss)
-        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze().float())
         self.log("val_pearson", pearson_corr)
 
         return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
@@ -176,7 +258,7 @@ class Model(pl.LightningModule):
         x, y = batch
         logits = self(x)
 
-        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze().float())
         self.log("test_pearson", test_pearson_corr)
         return test_pearson_corr
 
@@ -197,14 +279,28 @@ class Model(pl.LightningModule):
         return [optimizer], [scheduler]
 
 
-def soft_voting(model_names, trainer, dataloader):
-    models = torch.nn.ModuleList()
-    for name in model_names:
-        models.append(torch.load(f'./models/{name}.pt'))
+def soft_voting(model_names, cfg):
+    models = torch.nn.ModuleDict()
+    roberta_dataloader, roberta_trainer = get_trainer_dataloader('klue/roberta-large', cfg)
+    tunib_dataloader, tunib_trainer = get_trainer_dataloader('tunib/electra-ko-en-base', cfg)
+    
+    for i,name in enumerate(model_names):
+        if '.ckpt' in name:
+            #checkpoint = torch.load(f'./models/{name}')
+            #model = Model(get_cfg(name, cfg))
+            #model.load_state_dict(checkpoint['model'])
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{name}')
+            models[get_name(name,i)] = model
+        elif '.pt' in name:
+            models[get_name(name,i)] = torch.load(f'./models/{name}')
 
     predictions = []
-    for model in models:
-        predict = trainer.predict(model=model, datamodule=dataloader)
+    for model_name in models:
+        model = models[model_name]
+        if 'tunib' in name:
+            predict = tunib_trainer.predict(model=model, datamodule=tunib_dataloader)
+        elif 'roberta' in name:
+            predict = roberta_trainer.predict(model=model, datamodule=roberta_dataloader)
         predict = list(float(i) for i in torch.cat(predict))
         predictions.append(predict)
 
@@ -214,27 +310,37 @@ def soft_voting(model_names, trainer, dataloader):
     
     return vote_predictions
 
-
-def weighted_voting(model_names, weights, trainer, dataloader):
-    models = torch.nn.ModuleList()
-    for name in model_names:
-        if name.endswith('.ckpt'):
-            models.append(Model.load_from_checkpoint(checkpoint_path=f'models/{name}'))
-        else:
-            models.append(torch.load(f'./models/{name}'))
+def weighted_voting(model_names, weights, cfg):
+    models = torch.nn.ModuleDict()
+    roberta_dataloader, roberta_trainer = get_trainer_dataloader('klue/roberta-large', cfg)
+    tunib_dataloader, tunib_trainer = get_trainer_dataloader('tunib/electra-ko-en-base', cfg)
+    
+    for i,name in enumerate(model_names):
+        if '.ckpt' in name:
+            #checkpoint = torch.load(f'./models/{name}')
+            #model = Model(get_cfg(name, cfg))
+            #model.load_state_dict(checkpoint['model'])
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{name}')
+            models[get_name(name,i)] = model
+        elif '.pt' in name:
+            models[get_name(name,i)] = torch.load(f'./models/{name}')
 
     predictions = []
-    for idx,model in enumerate(models):
-        predict = trainer.predict(model=model, datamodule=dataloader)
+    for idx, model_name in enumerate(models):
+        model = models[model_name]
+        if 'tunib' in name:
+            predict = tunib_trainer.predict(model=model, datamodule=tunib_dataloader)
+        elif 'roberta' in name:
+            predict = roberta_trainer.predict(model=model, datamodule=roberta_dataloader)
         predict = list(float(i)*weights[idx] for i in torch.cat(predict))
         predictions.append(predict)
 
     vote_predictions = np.sum(np.array(predictions), axis=0)/sum(weights)
     vote_predictions = torch.from_numpy(vote_predictions)
     vote_predictions = list(round(float(i), 1) for i in vote_predictions)
-
-
+    
     return vote_predictions
+
 
 if __name__ == '__main__':
 
@@ -309,6 +415,6 @@ if __name__ == '__main__':
         else: #Weighted voting ensemble
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
             weights = cfg.inference.weighted_ensemble
-            vote_predictions = weighted_voting(cfg.inference.ensemble, weights, trainer, dataloader)
+            vote_predictions = weighted_voting(cfg.inference.ensemble, weights, cfg)
             output['target'] = vote_predictions
             output.to_csv('output.csv', index=False)
