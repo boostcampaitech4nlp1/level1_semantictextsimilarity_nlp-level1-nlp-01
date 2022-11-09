@@ -30,6 +30,7 @@ train:
     optimizer : AdamW # [Adam, AdamW, RMSprop, NAdam, RAdam]
     R_drop : False
     R_drop_alpha : 1 # default : 1
+    cls_sep : None # [Concat, Add, None]
 
 inference:
     ensemble : # List or False # 

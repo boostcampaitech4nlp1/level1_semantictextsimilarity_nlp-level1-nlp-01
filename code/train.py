@@ -33,16 +33,21 @@ import os
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, targets=[]):
-        self.inputs = inputs
+        inputs = pd.DataFrame(inputs)
+        self.inputs = inputs['input_ids'].tolist()
+        self.attention_mask = inputs['attention_mask'].tolist()
+        self.token_type_ids = inputs['token_type_ids'].tolist()
         self.targets = targets
+        
 
     # 학습 및 추론 과정에서 데이터를 1개씩 꺼내오는 곳
     def __getitem__(self, idx):
         # 정답이 있다면 else문을, 없다면 if문을 수행합니다
         if len(self.targets) == 0:
-            return torch.tensor(self.inputs[idx])
+            return torch.tensor(self.inputs[idx]), torch.tensor(self.attention_mask[idx]), torch.tensor(self.token_type_ids[idx])
         else:
-            return torch.tensor(self.inputs[idx]), torch.tensor(self.targets[idx])
+            return torch.tensor(self.inputs[idx]), torch.tensor(self.attention_mask[idx]), torch.tensor(self.token_type_ids[idx]), torch.tensor(self.targets[idx])
+
 
     # 입력하는 개수만큼 데이터를 사용합니다
     def __len__(self):
@@ -55,6 +60,7 @@ class Dataloader(pl.LightningDataModule):
         self.model_name = cfg.model.model_name
         self.batch_size = cfg.train.batch_size
         self.shuffle = cfg.data.shuffle
+        self.max_length = cfg.data.max_length
 
         self.train_path = cfg.path.train_path
         self.dev_path = cfg.path.dev_path
@@ -66,7 +72,7 @@ class Dataloader(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=128)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name, max_length=self.max_length)
         self.target_columns = ['label']
         self.delete_columns = ['id']
         self.text_columns = ['sentence_1', 'sentence_2']
@@ -80,8 +86,8 @@ class Dataloader(pl.LightningDataModule):
         for idx, item in tqdm(dataframe.iterrows(), desc='tokenizing', total=len(dataframe)):
             # 두 입력 문장을 [SEP] 토큰으로 이어붙여서 전처리합니다.
             text = '[SEP]'.join([item[text_column] for text_column in self.text_columns])
-            outputs = self.tokenizer(text, add_special_tokens=True, max_length=128, padding='max_length', truncation=True)
-            data.append(outputs['input_ids'])
+            outputs = self.tokenizer(item['sentence_1'], item['sentence_2'], add_special_tokens=True, max_length=self.max_length, padding='max_length', truncation=True)
+            data.append(outputs)
         return data
 
     def preprocessing(self, data):
@@ -110,7 +116,7 @@ class Dataloader(pl.LightningDataModule):
         if stage == 'fit':
 
             if self.k_fold:
-                # Split train data only K-times
+                # 학습 데이터를 k개로 나눕니다.
                 train_data = pd.read_csv(self.train_path)
                 dev_data = pd.read_csv(self.dev_path)
                 total_data = pd.concat([train_data,dev_data]).reset_index(drop=True)
@@ -147,17 +153,46 @@ class Dataloader(pl.LightningDataModule):
             predict_inputs, predict_targets = self.preprocessing(predict_data)
             self.predict_dataset = Dataset(predict_inputs, [])
 
+    def collate_fn(self, batch):
+        label_list = []
+        data_list = {'input_ids':[], 'attention_mask':[], 'token_type_ids':[]}
+        pad = 0
+        maxl = 0
+        for _input, _att_mask, _tok_type_ids, _label in batch:
+            if pad not in _att_mask.tolist():
+                maxl = self.max_length
+            elif _att_mask.tolist().index(pad) > maxl: 
+                maxl = _att_mask.tolist().index(pad)
+            
+            data_list['input_ids'].append(_input)
+            data_list['attention_mask'].append(_att_mask)
+            data_list['token_type_ids'].append(_tok_type_ids)
+            label_list.append(_label)
+            
+        for k in data_list:
+            _data = data_list[k]
+            for i,v in enumerate(_data):
+                _data[i] = v[:maxl]
+        
+        feature_list = []
+        for i in range(len(data_list['input_ids'])):
+            tmp = torch.stack([data_list['input_ids'][i], data_list['attention_mask'][i], data_list['token_type_ids'][i]], dim=0).cpu()
+            feature_list.append(tmp)
+        
+        return torch.stack(feature_list, dim=0).long(), torch.tensor(label_list).long()
+
+
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=self.shuffle)
+        return torch.utils.data.DataLoader(self.train_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size, shuffle=self.shuffle)
 
     def val_dataloader(self):
-        return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.val_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
 
     def test_dataloader(self):
-        return torch.utils.data.DataLoader(self.test_dataset, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.test_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
 
     def predict_dataloader(self):
-        return torch.utils.data.DataLoader(self.predict_dataset, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(self.predict_dataset, collate_fn=self.collate_fn, batch_size=self.batch_size)
 
 
 class Model(pl.LightningModule):
@@ -169,19 +204,36 @@ class Model(pl.LightningModule):
         self.lr = cfgs.train.learning_rate
         self.drop_out = cfgs.train.drop_out
         self.warmup_ratio = cfgs.train.warmup_ratio
+        self.cfgs = cfgs
 
-        self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
-            pretrained_model_name_or_path=self.model_name,
-            num_labels=1,
-            hidden_dropout_prob=self.drop_out,
-            attention_probs_dropout_prob=self.drop_out)
+        if(self.cfgs.train.cls_sep.lower() == "none"):
+            self.plm = transformers.AutoModelForSequenceClassification.from_pretrained(
+                pretrained_model_name_or_path=self.model_name,
+                num_labels=1,
+                hidden_dropout_prob=self.drop_out,
+                attention_probs_dropout_prob=self.drop_out)
+        else:
+            input_size = 1536
+            if('roberta' in self.model_name):
+                input_size = 2048
+            if(self.cfgs.train.cls_sep.lower() == "add"):
+                input_size = input_size/2
+            
+            self.dense = torch.nn.Linear(input_size, 768)
+            self.dropout = torch.nn.Dropout(self.drop_out)
+            self.output = torch.nn.Linear(768, 1)
+
+            self.plm = transformers.AutoModel.from_pretrained(
+                pretrained_model_name_or_path=self.model_name,
+                hidden_dropout_prob=None,
+                attention_probs_dropout_prob=None)
 
         try:  
             self.loss_func = load_obj(cfgs.train.loss_function)()
         except:
             self.loss_func = torch.nn.SmoothL1Loss() # L1Loss -> SmoothL1Loss
 
-        # For smart_loss
+        # smart_loss
         if cfg.train.smart_loss:
             def eval_fn(embed):
                 outputs = self.plm.roberta(inputs_embeds=embed, attention_mask=None)
@@ -194,8 +246,38 @@ class Model(pl.LightningModule):
             self.eval_fn = eval_fn
             self.regularizer = SMARTLoss(eval_fn=eval_fn, loss_fn=reg_loss_fn)
 
-    def forward(self, x):
-        x = self.plm(x)['logits']
+    def forward(self, data):
+        input_ids = data[:,0,:].long()
+        attention_mask = data[:,1,:].long()
+        token_type_ids = data[:,2,:].long()
+        
+        if(self.cfgs.train.cls_sep.lower() == "none"):
+            x = self.plm(input_ids)['logits']
+            
+        else:
+            sep = 1
+            sep_idx = [item.tolist().index(sep)-1 for item in token_type_ids]  
+            
+            output = self.plm(input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids)
+
+            features = output[0]
+            sep_hidden = []
+            for i,item in enumerate(features):
+                sep_hidden.append(features[i,sep_idx[i],:])
+            
+            sep_hidden = torch.stack(sep_hidden, dim=0)
+            
+            x = torch.concat([features[:, 0, :],sep_hidden], dim=1)
+            if(self.cfgs.train.cls_sep.lower() == "add"):
+                x = features[:, 0, :] + sep_hidden
+                
+            x = self.dropout(x)
+            x = self.dense(x)
+            x = torch.tanh(x)
+            x = self.dropout(x)
+            x = self.output(x)['logits']
 
         return x
 
@@ -238,7 +320,7 @@ class Model(pl.LightningModule):
         loss = self.loss_func(logits, y.float())
 
         self.log("val_loss", loss)
-        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze().float())
         self.log("val_pearson", pearson_corr)
 
         return {'val_loss':loss, 'val_pearson_corr':pearson_corr}
@@ -247,7 +329,7 @@ class Model(pl.LightningModule):
         x, y = batch
         logits = self(x)
 
-        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze())
+        test_pearson_corr = torchmetrics.functional.pearson_corrcoef(logits.squeeze(), y.squeeze().float())
         self.log("test_pearson", test_pearson_corr)
         return test_pearson_corr
 
