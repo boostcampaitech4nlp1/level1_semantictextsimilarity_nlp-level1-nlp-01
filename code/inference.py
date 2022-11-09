@@ -279,14 +279,28 @@ class Model(pl.LightningModule):
         return [optimizer], [scheduler]
 
 
-def soft_voting(model_names, trainer, dataloader):
-    models = torch.nn.ModuleList()
-    for name in model_names:
-        models.append(torch.load(f'./models/{name}.pt'))
+def soft_voting(model_names, cfg):
+    models = torch.nn.ModuleDict()
+    roberta_dataloader, roberta_trainer = get_trainer_dataloader('klue/roberta-large', cfg)
+    tunib_dataloader, tunib_trainer = get_trainer_dataloader('tunib/electra-ko-en-base', cfg)
+    
+    for i,name in enumerate(model_names):
+        if '.ckpt' in name:
+            #checkpoint = torch.load(f'./models/{name}')
+            #model = Model(get_cfg(name, cfg))
+            #model.load_state_dict(checkpoint['model'])
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{name}')
+            models[get_name(name,i)] = model
+        elif '.pt' in name:
+            models[get_name(name,i)] = torch.load(f'./models/{name}')
 
     predictions = []
-    for model in models:
-        predict = trainer.predict(model=model, datamodule=dataloader)
+    for model_name in models:
+        model = models[model_name]
+        if 'tunib' in name:
+            predict = tunib_trainer.predict(model=model, datamodule=tunib_dataloader)
+        elif 'roberta' in name:
+            predict = roberta_trainer.predict(model=model, datamodule=roberta_dataloader)
         predict = list(float(i) for i in torch.cat(predict))
         predictions.append(predict)
 
@@ -296,27 +310,37 @@ def soft_voting(model_names, trainer, dataloader):
     
     return vote_predictions
 
-
-def weighted_voting(model_names, weights, trainer, dataloader):
-    models = torch.nn.ModuleList()
-    for name in model_names:
-        if name.endswith('.ckpt'):
-            models.append(Model.load_from_checkpoint(checkpoint_path=f'models/{name}'))
-        else:
-            models.append(torch.load(f'./models/{name}'))
+def weighted_voting(model_names, weights, cfg):
+    models = torch.nn.ModuleDict()
+    roberta_dataloader, roberta_trainer = get_trainer_dataloader('klue/roberta-large', cfg)
+    tunib_dataloader, tunib_trainer = get_trainer_dataloader('tunib/electra-ko-en-base', cfg)
+    
+    for i,name in enumerate(model_names):
+        if '.ckpt' in name:
+            #checkpoint = torch.load(f'./models/{name}')
+            #model = Model(get_cfg(name, cfg))
+            #model.load_state_dict(checkpoint['model'])
+            model = Model.load_from_checkpoint(checkpoint_path=f'./models/{name}')
+            models[get_name(name,i)] = model
+        elif '.pt' in name:
+            models[get_name(name,i)] = torch.load(f'./models/{name}')
 
     predictions = []
-    for idx,model in enumerate(models):
-        predict = trainer.predict(model=model, datamodule=dataloader)
+    for idx, model_name in enumerate(models):
+        model = models[model_name]
+        if 'tunib' in name:
+            predict = tunib_trainer.predict(model=model, datamodule=tunib_dataloader)
+        elif 'roberta' in name:
+            predict = roberta_trainer.predict(model=model, datamodule=roberta_dataloader)
         predict = list(float(i)*weights[idx] for i in torch.cat(predict))
         predictions.append(predict)
 
     vote_predictions = np.sum(np.array(predictions), axis=0)/sum(weights)
     vote_predictions = torch.from_numpy(vote_predictions)
     vote_predictions = list(round(float(i), 1) for i in vote_predictions)
-
-
+    
     return vote_predictions
+
 
 if __name__ == '__main__':
 
@@ -391,6 +415,6 @@ if __name__ == '__main__':
         else: #Weighted voting ensemble
             trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
             weights = cfg.inference.weighted_ensemble
-            vote_predictions = weighted_voting(cfg.inference.ensemble, weights, trainer, dataloader)
+            vote_predictions = weighted_voting(cfg.inference.ensemble, weights, cfg)
             output['target'] = vote_predictions
             output.to_csv('output.csv', index=False)
