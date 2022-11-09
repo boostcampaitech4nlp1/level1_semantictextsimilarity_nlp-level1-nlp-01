@@ -10,13 +10,13 @@ A solution for STS Competition in the 4nd BoostCamp AI Tech by **개발새발(�
 
 
 ## Content
-- [Competition Abstract](Competition-Abstract)
-- [Model](Model)
-- [Preprocessing](Preprocessing)
-- [Data augmentation](Data-augmentation)
-- [Train](Train)
-- [Inference](Inference)
-- [Result](Result)
+- [Competition Abstract](#competition-abstract)
+- [Model](#model)
+- [Preprocessing](#preprocessing)
+- [Data augmentation](#data-augmentation)
+- [Train](#train)
+- [Inference](#inference)
+- [Result](#result)
 
 
 ## Competition Abstract  
