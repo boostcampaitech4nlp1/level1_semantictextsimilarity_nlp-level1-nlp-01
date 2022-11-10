@@ -1,6 +1,6 @@
+import os, math
+
 import pandas as pd
-import os
-import math
 import torch
 import torchmetrics
 import argparse
