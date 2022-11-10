@@ -26,8 +26,40 @@ A solution for STS Competition in the 4nd BoostCamp AI Tech by **개발새발(�
 - 총 데이터 개수 : 10,974 문장 쌍
   - Train : 9,324
   - Test : 1,100
-  - Dev : 550  
-
+  - Dev : 550
+  
+## Project Tree
+<pre>
+<code>
+level1_semantictextsimilarity_nlp-level1-nlp-01
+├── README.md
+├── code   
+│   ├── config
+│   │   └── base_config.yaml
+│   ├── data_loader
+│   │   └── data_loader.py
+│   ├── model
+│   │   └── model.py
+│   ├── utils
+│   │   ├── prediction_analysis.py
+│   │   └── utils.py
+│   ├── saved 
+│   │   └── ... # model & submission.csv saved here
+│   ├── train.py
+│   ├── inference.py
+│   └── requirements.txt
+├── data
+│   ├── DA.png
+│   ├── EDA.ipynb
+│   ├── train.csv
+│   ├── dev.csv
+│   ├── test.csv
+│   ├── sample_submission.csv
+│   ├── preprocessed 
+│   │   └── ... # Store preprocessed data
+└── install.sh
+</code>
+</pre>
 
 ## Model
 
