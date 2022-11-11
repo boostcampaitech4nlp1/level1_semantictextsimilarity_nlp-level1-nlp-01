@@ -40,10 +40,10 @@ level1_semantictextsimilarity_nlp-level1-nlp-01
 │   ├── model
 │   │   └── model.py
 │   └── utils
-│    |    ├── prediction_analysis.py
-│    |    └── utils.py
+│   |    ├── prediction_analysis.py
+│   |    └── utils.py
 │   ├── saved
-│    |    └── # model & output.csv saved here
+│   |    └── # model & output.csv saved here
 │   ├── inference.py
 │   ├── requirements.txt
 │   ├── saved
