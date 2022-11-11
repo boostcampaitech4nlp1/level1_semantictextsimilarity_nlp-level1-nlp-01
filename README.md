@@ -8,17 +8,6 @@ A solution for STS Competition in the 4nd BoostCamp AI Tech by **개발새발(�
 - Research : 김해원 <br>
 - Code review : 양봉석, 임성근 <br>
 
-
-## Content
-- [Competition Abstract](#competition-abstract)
-- [Model](#model)
-- [Preprocessing](#preprocessing)
-- [Data augmentation](#data-augmentation)
-- [Train](#train)
-- [Inference](#inference)
-- [Result](#result)
-
-
 ## Competition Abstract  
 - **의미 유사도 판별(Semantic Text Similarity, STS)** 이란 두 문장이 의미적으로 얼마나 유사한지를 수치화하는 자연어처리 태스크이다.
 - STS 데이터셋을 활용해 두 문장의 유사도를 측정하는 AI모델을 구축한다. 
@@ -88,7 +77,7 @@ NUM=5 # 5회 반복 지정
 ```
 3. sweep initialize
 ```
-wandb sweep --project sweep-demo-cli config.yaml
+wandb sweep --project your_project_name config.yaml
 ```
 4. train 시작
 ```
