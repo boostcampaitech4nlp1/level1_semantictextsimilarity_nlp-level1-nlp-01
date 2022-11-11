@@ -71,28 +71,15 @@ level1_semantictextsimilarity_nlp-level1-nlp-01
 
 
 ## Preprocessing
-데이터셋 전처리는 다음과 같이 진행합니다.
-```
-python code/preprocessing.py
-```
-이 모듈을 통해 이모지 제거, 맞춤법 교정을, text normalizing을 수행할 수 있습니다. 맞춤법 교정은 py-hanspell(https://github.com/ssut/py-hanspell)을 사용하고, text normaliziing은 soynlp(https://github.com/lovit/soynlp)를 사용합니다.
+Main branch 내용과 동일
 
 
 ## Data augmentation
-```
-## TODO: augmentation 코드 넣기
-```  
+Main branch 내용과 동일
 
 
 ## Train
 학습은 다음과 같이 진행합니다.  
-
-**1. config 파일 만들기**  
-`./code/config/base_config.yaml` 파일의 양식과 같이 학습 데이터, 사용할 모델, hyperparameter, wandb log 주소 등을 지정해 준 `my_config.yaml` 파일을 만들어줍니다. 
-
-**2. 학습 수행**  
-터미널 창에 `python train.py --my_config`을 입력하여 학습을 진행합니다. config 파일에 입력된 설정으로 학습이 진행됩니다. 학습이 모두 완료되면 dev set에 대한 pearson correlation 점수가 가장 높은 모델이 `./code/models/` 에 저장됩니다.  
-
 
 ## Inference
 1. 학습 때 사용했던 config 파일을 `inference.py`에 인자로 넣어서 추론을 진행합니다.  
