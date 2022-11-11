@@ -34,20 +34,20 @@ A solution for STS Competition in the 4nd BoostCamp AI Tech by **개발새발(�
 level1_semantictextsimilarity_nlp-level1-nlp-01
 ├── README.md
 ├── code   
-│   ├── config
-│   │   └── base_config.yaml
+│   ├── config.yaml # wandb sweep config file
 │   ├── data_loader
 │   │   └── data_loader.py
 │   ├── model
 │   │   └── model.py
-│   ├── utils
-│   │   ├── prediction_analysis.py
-│   │   └── utils.py
-│   ├── saved 
-│   │   └── ... # model & submission.csv saved here
-│   ├── train.py
+│   └── utils
+│    |    ├── prediction_analysis.py
+│    |    └── utils.py
+│   ├── saved
+│    |    └── # model & output.csv saved here
 │   ├── inference.py
-│   └── requirements.txt
+│   ├── requirements.txt
+│   ├── saved
+│   └── train.py
 ├── data
 │   ├── DA.png
 │   ├── EDA.ipynb
