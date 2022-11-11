@@ -12,84 +12,87 @@ from omegaconf import OmegaConf
 from pytorch_lightning.utilities.seed import seed_everything
 
 dir = os.path.realpath(__file__)
-dir = os.path.abspath(os.path.join(dir, os.pardir,os.pardir))
+dir = os.path.abspath(os.path.join(dir, os.pardir, os.pardir))
 sys.path.append(dir)
 from data_loader.data_loader import Dataloader
 from model.model import PredictModel
 from utils.utils import soft_voting, weighted_voting
 
 
-def main(cfg):
+def main(hparams):
+
     # Load dataloader & model
-    dataloader = Dataloader(cfg)
-    output = pd.read_csv('../data/sample_submission.csv')
+    dataloader = Dataloader(hparams)
+    output = pd.read_csv("../data/sample_submission.csv")
 
-    # Pred using a single model
-    if not cfg.inference.ensemble:
+    trainer = pl.Trainer(
+        gpus=1,
+        max_epochs=hparams['epochs'],
+        log_every_n_steps=1,
+    )
 
-        trainer = pl.Trainer(gpus=cfg.train.gpus, 
-                            max_epochs=cfg.train.max_epoch,
-                            log_every_n_steps=cfg.train.logging_step)
+    # Inference part
+    model = Model.load_from_checkpoint(
+        checkpoint_path=f"./saved/{hparams['saved_name']}.ckpt"
+    )
+    predictions = trainer.predict(model=model, datamodule=dataloader)
+    predictions = list(round(float(i), 1) for i in torch.cat(predictions))
 
-        # Inference part
-        model = PredictModel.load_from_checkpoint(checkpoint_path=f'./saved/{cfg.model.saved_name}.ckpt')
-        predictions = trainer.predict(model=model, datamodule=dataloader)
-        predictions = list(round(float(i), 1) for i in torch.cat(predictions))
-        
-        # Save as csv file
-        output['target'] = predictions
-        output.to_csv('output.csv', index=False)
-    
-    # Pred using ensemble
-    else:
-        if not cfg.inference.weighted_ensemble: #  soft voting
-            length = len(output)
+    # Save as csv file
+    output["target"] = predictions
+    output.to_csv("./saved/output.csv", index=False)
 
-            # make void tensor to store each model's predictions
-            tmp_sum = torch.zeros((length,),dtype=torch.float32)
-
-            for each in cfg.inference.ensemble:
-                trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
-
-                # Inference part
-                if each.endswith('.ckpt'):
-                    model = PredictModel.load_from_checkpoint(checkpoint_path=f'models/{each}')
-                else:
-                    model = torch.load('models/' + each)
-                each_pred = trainer.predict(model=model, datamodule=dataloader)
-                each_pred = torch.cat(each_pred)
-                tmp_sum += each_pred
-
-            # Divide total_sum by the number of models
-            tmp_sum = tmp_sum / len(cfg.inference.ensemble)
-            predictions = list(round(float(i), 1) for i in tmp_sum)
-
-            # Save as csv file
-            output['target'] = predictions
-            output.to_csv('output.csv', index=False)
-
-        else: #Weighted voting ensemble
-            trainer = pl.Trainer(gpus=cfg.train.gpus, max_epochs=cfg.train.max_epoch, log_every_n_steps=cfg.train.logging_step)
-            weights = cfg.inference.weighted_ensemble
-            model = Model.load_from_checkpoint(checkpoint_path=f'./saved/{name}')
-            vote_predictions = weighted_voting(model, cfg.inference.ensemble, weights, cfg)
-            
-            # Save as csv file
-            output['target'] = vote_predictions
-            output.to_csv('output.csv', index=False)
-
-
-if __name__ == '__main__':
-
-    # receive arguments 
+def arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='')
-    args, _ = parser.parse_known_args()
-    cfg = OmegaConf.load(f'./config/{args.config}.yaml')
-    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--model_name", default="klue/roberta-small", type=str)
+    parser.add_argument("--batch_size", default=32, type=int)
+    parser.add_argument("--epochs", default=5, type=int)
+    parser.add_argument("--shuffle", default=True)
+    parser.add_argument("--lr", default=1e-5, type=float)
+    parser.add_argument("--train_path", default="/opt/ml/data/train.csv")
+    parser.add_argument("--dev_path", default="/opt/ml/data/dev.csv")
+    parser.add_argument("--test_path", default="/opt/ml/data/dev.csv")
+    parser.add_argument("--predict_path", default="/opt/ml/data/test.csv")
+    parser.add_argument("--R_drop", default=False)
+    parser.add_argument("--optimizer", default="AdamW")
+    parser.add_argument("--loss_fct", default="L1Loss")
+    parser.add_argument("--drop_out", default=0.1)
+    parser.add_argument("--warmup_step", default=0)
+    parser.add_argument("--preprocessing", default=False)
+    parser.add_argument("--precision", default=16, type=int)
+    parser.add_argument("--saved_name", default="test_model", type=str)
+    parser.add_argument('--seed', default=2022, type=int)
+
+    args = parser.parse_args()
+
+    return args
+
+
+if __name__ == "__main__":
+
+    # receive arguments
+    args = arguments()
 
     # seed everything
-    seed_everything(cfg.train.seed)
+    seed_everything(args.seed)
+
+    hparams = {
+            "lr": args.lr,
+            "bs": args.batch_size,
+            "epochs": args.epochs,
+            "precision": args.precision,
+            "R_drop": args.R_drop,
+            "warmup_step": args.warmup_step,
+            "drop_out": args.drop_out,
+            "optimizer": args.optimizer,
+            "model_name": args.model_name,
+            "train_path": args.train_path,
+            "dev_path": args.dev_path,
+            "test_path": args.test_path,
+            "predict_path": args.predict_path,
+            'saved_name':args.saved_name
+        }
 
     # main
-    main(cfg)
+    main(hparams)
