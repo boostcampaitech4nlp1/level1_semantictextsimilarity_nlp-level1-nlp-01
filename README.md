@@ -79,16 +79,27 @@ Main branch 내용과 동일
 
 
 ## Train
-학습은 다음과 같이 진행합니다.  
+학습은 다음과 같이 진행합니다.
+wandb official document : https://docs.wandb.ai/guides/sweeps/add-w-and-b-to-your-code
+1. config.yaml 파일 수정
+2. 반복하고자 하는 시행횟수 지정
+```
+NUM=5 # 5회 반복 지정
+```
+3. sweep initialize
+```
+wandb sweep --project sweep-demo-cli config.yaml
+```
+4. train 시작
+```
+wandb agent --count $NUM your_name/your_project_name/sweepID # 발급되는 sweepID는 그때 마다 다름
+```
+
 
 ## Inference
-1. 학습 때 사용했던 config 파일을 `inference.py`에 인자로 넣어서 추론을 진행합니다.  
-`python code/inference.py --config my_config`
-2. config 파일의 `Inference` 세팅을 이용하면 여러 모델끼리의 ensemble도 수행해볼 수 있습니다.  
+1. 학습 때 사용했던 argument를 지정하여 inference.py 실행해줍니다.
+`python code/inference.py --batch_size 16 ....`
 
 
 ## Result
-||Pearson|Rank|
-|:---|:---|:---|
-|Public|0.9271|7|
-|**Private**|**0.9337**|**5**|
+Main branch 내용과 
