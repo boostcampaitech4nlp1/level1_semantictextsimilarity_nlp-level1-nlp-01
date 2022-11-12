@@ -123,5 +123,5 @@ python code/preprocessing.py
 |**Private**|**0.9337**|**5**|
 
 ## Wrap-up Report
-![NLP-01조_Wrap_up_리포트.pdf](https://github.com/boostcampaitech4nlp1/level1_semantictextsimilarity_nlp-level1-nlp-01/files/9994735/NLP-01._Wrap_up_.pdf)
+![NLP-01조_Wrap_up_리포트(업로드용).pdf](https://github.com/boostcampaitech4nlp1/level1_semantictextsimilarity_nlp-level1-nlp-01/files/9994739/NLP-01._Wrap_up_.pdf)
 
